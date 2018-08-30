@@ -809,7 +809,7 @@ void arrive_syn_tr_rc(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * lp)
     (void)bf;
     (void)m;
     (void)lp;
-   printf("\n Data arrived %d total data %ld: time %lf ", m->fwd.num_bytes, s->syn_data, tw_now());
+   printf("\n Data arrived %d total data %ld: time %lf ", m->fwd.num_bytes, s->syn_data, tw_now(lp));
     s->num_recvs--;
     int data = m->fwd.num_bytes;
     s->syn_data -= data;
