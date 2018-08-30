@@ -55,7 +55,7 @@ static int BIAS_MIN = 1;
 static int DF_DALLY = 0;
 static int adaptive_threshold = 1024;
 
-static tw_stime max_qos_monitor = 100000000;
+static tw_stime max_qos_monitor = 80000000;
 static long num_local_packets_sr = 0;
 static long num_local_packets_sg = 0;
 static long num_remote_packets = 0;
