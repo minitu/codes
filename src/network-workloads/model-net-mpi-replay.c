@@ -796,7 +796,7 @@ static void gen_synthetic_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * l
     m_new->msg_type = CLI_BCKGND_GEN;
     tw_event_send(e);
     
-    if(s->gen_data == max_gen_data)
+    if(s->gen_data >= max_gen_data)
     {
         bf->c5 = 1;
         s->is_finished = 1;
