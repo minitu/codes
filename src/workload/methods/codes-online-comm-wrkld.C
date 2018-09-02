@@ -23,7 +23,7 @@
 #include "lammps.h"
 #include "nekbone_swm_user_code.h"
 #include "nearest_neighbor_swm_user_code.h"
-#include "all_to_one_swm_user_code.h"
+// #include "all_to_one_swm_user_code.h"
 
 #define ALLREDUCE_SHORT_MSG_SIZE 2048
 
@@ -72,13 +72,13 @@ typedef struct rank_mpi_compare {
 } rank_mpi_compare;
 
 /*
- * peer: the receiving peer id 
+ * peer: the receiving peer id
  * comm_id: the communicator id being used
- * tag: tag id 
+ * tag: tag id
  * reqvc: virtual channel being used by the message (to be ignored)
  * rspvc: virtual channel being used by the message (to be ignored)
  * buf: the address of sender's buffer in memory
- * bytes: number of bytes to be sent 
+ * bytes: number of bytes to be sent
  * reqrt and rsprt: routing types (to be ignored) */
 
 void SWM_Send(SWM_PEER peer,
@@ -102,7 +102,7 @@ void SWM_Send(SWM_PEER peer,
     wrkld_per_rank.u.send.dest_rank = peer;
 
 #ifdef DBG_COMM
-/*    if(tag != 1235 && tag != 1234) 
+/*    if(tag != 1235 && tag != 1234)
     {
         auto it = send_count.find(bytes);
         if(it == send_count.end())
@@ -135,16 +135,16 @@ void SWM_Send(SWM_PEER peer,
  * reqvc and rspvc: virtual channel IDs for request and response (ignore for
  * our purpose)
  * buf: buffer location for the call (ignore for our purpose)
- * reqrt and rsprt: routing types, ignore and use routing from config file instead. 
+ * reqrt and rsprt: routing types, ignore and use routing from config file instead.
  * */
 void SWM_Barrier(
         SWM_COMM_ID comm_id,
         SWM_VC reqvc,
         SWM_VC rspvc,
-        SWM_BUF buf, 
+        SWM_BUF buf,
         SWM_UNKNOWN auto1,
         SWM_UNKNOWN2 auto2,
-        SWM_ROUTING_TYPE reqrt, 
+        SWM_ROUTING_TYPE reqrt,
         SWM_ROUTING_TYPE rsprt)
 {
     /* Add an event in the shared queue and then yield */
@@ -222,7 +222,7 @@ void SWM_Isend(SWM_PEER peer,
     wrkld_per_rank.u.send.dest_rank = peer;
 
 #ifdef DBG_COMM
-/*    if(tag != 1235 && tag != 1234) 
+/*    if(tag != 1235 && tag != 1234)
     {
         auto it = isend_count.find(bytes);
         if(it == isend_count.end())
@@ -288,7 +288,7 @@ void SWM_Recv(SWM_PEER peer,
 void SWM_Irecv(SWM_PEER peer,
         SWM_COMM_ID comm_id,
         SWM_TAG tag,
-        SWM_BUF buf, 
+        SWM_BUF buf,
         uint32_t* handle)
 {
     /* Add an event in the shared queue and then yield */
@@ -313,7 +313,7 @@ void SWM_Irecv(SWM_PEER peer,
     struct shared_context * sctx = static_cast<shared_context*>(arg);
     wrkld_per_rank.u.recv.dest_rank = sctx->my_rank;
     sctx->fifo.push_back(&wrkld_per_rank);
-    
+
     *handle = sctx->wait_id;
     wrkld_per_rank.u.recv.req_id = *handle;
     sctx->wait_id++;
@@ -345,7 +345,7 @@ void SWM_Compute(long cycle_count)
     assert(err == ABT_SUCCESS);
     struct shared_context * sctx = static_cast<shared_context*>(arg);
     sctx->fifo.push_back(&wrkld_per_rank);
-	
+
     ABT_thread_yield_to(global_prod_thread);
 
 }
@@ -385,7 +385,7 @@ void SWM_Waitall(int len, uint32_t * req_ids)
     wrkld_per_rank.op_type = CODES_WK_WAITALL;
     /* TODO: Check how to convert cycle count into delay? */
     wrkld_per_rank.u.waits.count = len;
-    wrkld_per_rank.u.waits.req_ids = (unsigned int*)calloc(len, sizeof(int));    
+    wrkld_per_rank.u.waits.req_ids = (unsigned int*)calloc(len, sizeof(int));
 
     for(int i = 0; i < len; i++)
         wrkld_per_rank.u.waits.req_ids[i] = req_ids[i];
@@ -439,7 +439,7 @@ void SWM_Sendrecv(
     recv_op.u.recv.num_bytes = 0;
 
 #ifdef DBG_COMM
-/*    if(sendtag != 1235 && sendtag != 1234) 
+/*    if(sendtag != 1235 && sendtag != 1234)
     {
         auto it = send_count.find(sendbytes);
         if(it == send_count.end())
@@ -715,19 +715,19 @@ void SWM_Finalize()
     struct shared_context * sctx = static_cast<shared_context*>(arg);
     sctx->fifo.push_back(&wrkld_per_rank);
 
-#ifdef DBG_COMM 
+#ifdef DBG_COMM
 /*    auto it = allreduce_count.begin();
     for(; it != allreduce_count.end(); it++)
     {
         cout << "\n Allreduce " << it->first << " " << it->second;
     }
-    
+
     it = send_count.begin();
     for(; it != send_count.end(); it++)
     {
         cout << "\n Send " << it->first << " " << it->second;
     }
-    
+
     it = isend_count.begin();
     for(; it != isend_count.end(); it++)
     {
@@ -760,7 +760,7 @@ static void workload_caller(void * arg)
         LAMMPS_SWM * lammps_swm = static_cast<LAMMPS_SWM*>(sctx->swm_obj);
         lammps_swm->call();
     }
-    else if(strcmp(sctx->workload_name, "nekbone") == 0) 
+    else if(strcmp(sctx->workload_name, "nekbone") == 0)
     {
         NEKBONESWMUserCode * nekbone_swm = static_cast<NEKBONESWMUserCode*>(sctx->swm_obj);
         nekbone_swm->call();
@@ -770,11 +770,11 @@ static void workload_caller(void * arg)
        NearestNeighborSWMUserCode * nn_swm = static_cast<NearestNeighborSWMUserCode*>(sctx->swm_obj);
        nn_swm->call();
     }
-    else if(strcmp(sctx->workload_name, "incast") == 0 || strcmp(sctx->workload_name, "incast1") == 0 || strcmp(sctx->workload_name, "incast2") == 0)
-    {
-       AllToOneSWMUserCode * incast_swm = static_cast<AllToOneSWMUserCode*>(sctx->swm_obj);
-       incast_swm->call();
-    }
+    // else if(strcmp(sctx->workload_name, "incast") == 0 || strcmp(sctx->workload_name, "incast1") == 0 || strcmp(sctx->workload_name, "incast2") == 0)
+    // {
+    //    AllToOneSWMUserCode * incast_swm = static_cast<AllToOneSWMUserCode*>(sctx->swm_obj);
+    //    incast_swm->call();
+    // }
 }
 static int comm_online_workload_load(const char * params, int app_id, int rank)
 {
@@ -783,9 +783,9 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
     int nprocs = o_params->nprocs;
 
     rank_mpi_context *my_ctx = new rank_mpi_context;
-    //my_ctx = (rank_mpi_context*)caloc(1, sizeof(rank_mpi_context));  
-    assert(my_ctx); 
-    my_ctx->sctx.my_rank = rank; 
+    //my_ctx = (rank_mpi_context*)caloc(1, sizeof(rank_mpi_context));
+    assert(my_ctx);
+    my_ctx->sctx.my_rank = rank;
     my_ctx->sctx.num_ranks = nprocs;
     my_ctx->sctx.wait_id = 0;
     my_ctx->app_id = app_id;
@@ -806,24 +806,24 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
     }
     else if(strcmp(o_params->workload_name, "nekbone") == 0)
     {
-        path.append("/workload.json"); 
+        path.append("/workload.json");
     }
     else if(strcmp(o_params->workload_name, "nearest_neighbor") == 0)
     {
-        path.append("/skeleton.json"); 
+        path.append("/skeleton.json");
     }
-    else if(strcmp(o_params->workload_name, "incast") == 0)
-    {
-        path.append("/incast.json"); 
-    }
-    else if(strcmp(o_params->workload_name, "incast1") == 0)
-    {
-        path.append("/incast1.json"); 
-    }
-    else if(strcmp(o_params->workload_name, "incast2") == 0)
-    {
-        path.append("/incast2.json"); 
-    }
+    // else if(strcmp(o_params->workload_name, "incast") == 0)
+    // {
+    //     path.append("/incast.json");
+    // }
+    // else if(strcmp(o_params->workload_name, "incast1") == 0)
+    // {
+    //     path.append("/incast1.json");
+    // }
+    // else if(strcmp(o_params->workload_name, "incast2") == 0)
+    // {
+    //     path.append("/incast2.json");
+    // }
     else
         tw_error(TW_LOC, "\n Undefined workload type %s ", o_params->workload_name);
 
@@ -832,7 +832,7 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
         std::ifstream jsonFile(path.c_str());
         boost::property_tree::json_parser::read_json(jsonFile, root);
         uint32_t process_cnt = root.get<uint32_t>("jobs.size", 1);
-        cpu_freq = root.get<double>("jobs.cfg.cpu_freq") / 1e9; 
+        cpu_freq = root.get<double>("jobs.cfg.cpu_freq") / 1e9;
     }
     catch(std::exception & e)
     {
@@ -854,18 +854,18 @@ static int comm_online_workload_load(const char * params, int app_id, int rank)
         NearestNeighborSWMUserCode * nn_swm = new NearestNeighborSWMUserCode(root, generic_ptrs);
         my_ctx->sctx.swm_obj = (void*)nn_swm;
     }
-    else if(strcmp(o_params->workload_name, "incast") == 0 || strcmp(o_params->workload_name, "incast1") == 0 || strcmp(o_params->workload_name, "incast2") == 0)
-    {
-        AllToOneSWMUserCode * incast_swm = new AllToOneSWMUserCode(root, generic_ptrs);
-        my_ctx->sctx.swm_obj = (void*)incast_swm;
-    }
+    // else if(strcmp(o_params->workload_name, "incast") == 0 || strcmp(o_params->workload_name, "incast1") == 0 || strcmp(o_params->workload_name, "incast2") == 0)
+    // {
+    //     AllToOneSWMUserCode * incast_swm = new AllToOneSWMUserCode(root, generic_ptrs);
+    //     my_ctx->sctx.swm_obj = (void*)incast_swm;
+    // }
 
     if(global_prod_thread == NULL)
     {
         ABT_xstream_self(&self_es);
         ABT_thread_self(&global_prod_thread);
     }
-    ABT_thread_create_on_xstream(self_es, 
+    ABT_thread_create_on_xstream(self_es,
             &workload_caller, (void*)&(my_ctx->sctx),
             ABT_THREAD_ATTR_NULL, &(my_ctx->sctx.producer));
 
@@ -908,7 +908,7 @@ static void comm_online_workload_get_next(int app_id, int rank, struct codes_wor
     assert(temp_data);
     while(temp_data->sctx.fifo.empty())
     {
-        ABT_thread_yield_to(temp_data->sctx.producer); 
+        ABT_thread_yield_to(temp_data->sctx.producer);
     }
     struct codes_workload_op * front_op = temp_data->sctx.fifo.front();
     assert(front_op);
@@ -939,7 +939,7 @@ static int comm_online_workload_finalize(const char* params, int app_id, int ran
     temp_data = qhash_entry(hash_link, rank_mpi_context, hash_link);
     assert(temp_data);
 
-    ABT_thread_join(temp_data->sctx.producer);    
+    ABT_thread_join(temp_data->sctx.producer);
     ABT_thread_free(&(temp_data->sctx.producer));
     return 0;
 }
@@ -949,17 +949,17 @@ struct codes_workload_method online_comm_workload_method =
 {
     //.method_name =
     (char*)"online_comm_workload",
-    //.codes_workload_read_config = 
+    //.codes_workload_read_config =
     NULL,
-    //.codes_workload_load = 
+    //.codes_workload_load =
     comm_online_workload_load,
-    //.codes_workload_get_next = 
+    //.codes_workload_get_next =
     comm_online_workload_get_next,
-    // .codes_workload_get_next_rc2 = 
+    // .codes_workload_get_next_rc2 =
     NULL,
     // .codes_workload_get_rank_cnt
     comm_online_workload_get_rank_cnt,
-    // .codes_workload_finalize = 
+    // .codes_workload_finalize =
     comm_online_workload_finalize
 };
 } // closing brace for extern "C"
