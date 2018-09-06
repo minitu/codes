@@ -810,7 +810,6 @@ void arrive_syn_tr_rc(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * lp)
     (void)bf;
     (void)m;
     (void)lp;
-   printf("\n Data arrived %d total data %ld: time %lf ", m->fwd.num_bytes, s->syn_data, tw_now(lp));
     s->num_recvs--;
     int data = m->fwd.num_bytes;
     s->syn_data -= data;
@@ -826,6 +825,7 @@ void arrive_syn_tr(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * lp)
 //    printf("\n Data arrived %d total data %ld ", m->fwd.num_bytes, s->syn_data);
     if(s->local_rank == 0)
      {
+        printf("Data arrived %d total data %ld: time %lf\n", m->fwd.num_bytes, s->syn_data, tw_now(lp));
 //    	printf("\n Data arrived %lld rank %llu total data %ld ", m->fwd.num_bytes, s->nw_id, s->syn_data);
 /*	if(s->syn_data > upper_threshold)
     if(s->local_rank == 0)
