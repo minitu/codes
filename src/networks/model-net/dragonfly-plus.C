@@ -895,6 +895,9 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
 
     /* MM: This should be 2 for dragonfly plus*/
     p->num_vcs = 2;
+    
+    if(p->num_qos_levels > 1)
+        p->num_vcs = p->num_qos_levels * p->num_vcs;
 
     rc = configuration_get_value_int(&config, "PARAMS", "num_groups", anno, &p->num_groups);
     if (rc) {
