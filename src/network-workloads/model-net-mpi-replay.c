@@ -1563,10 +1563,8 @@ static void codes_exec_mpi_send(nw_state* s,
     {
         if(s->app_id == 0) 
           strcpy(prio, "high");
-        else if(s->app_id == 1)
-          strcpy(prio, "medium");
         else
-          tw_error(TW_LOC, "\n Invalid app id");
+          strcpy(prio, "medium");
     }
     else if(priority_type == 1)
     {
