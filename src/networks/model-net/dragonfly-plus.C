@@ -4256,11 +4256,13 @@ static void router_packet_send(router_state *s, tw_bf *bf, terminal_plus_message
     }
     tw_event_send(e);
 
-    s->qos_data[output_port][vcg] += msg_size; 
     cur_entry = return_head(s->pending_msgs[output_port], s->pending_msgs_tail[output_port], output_chan);
     rc_stack_push(lp, cur_entry, delete_terminal_plus_message_list, s->st);
 
-  
+    s->qos_data[output_port][vcg] += msg_size; 
+    s->next_output_available_time[output_port] -= s->params->router_delay;
+    ts -= s->params->router_delay;
+
     int next_output_chan = get_next_router_vcg(s, bf, msg, lp); 
 
     if(next_output_chan < 0)
