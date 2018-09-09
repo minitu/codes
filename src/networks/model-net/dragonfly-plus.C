@@ -777,7 +777,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
 
     rc = configuration_get_value_double(&config, "PARAMS", "max_qos_monitor", anno, &max_qos_monitor);
     if(rc) {
-        printf("\n Setting adaptive threshold to %lf ", max_qos_monitor);
+        printf("\n Setting max_qos_monitor to %lf ", max_qos_monitor);
 	}
 
     rc = configuration_get_value_int(&config, "PARAMS", "cn_vc_size", anno, &p->cn_vc_size);
@@ -1250,8 +1250,9 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
     // printf("%d: Terminal Init()\n",lp->gid);
     s->packet_gen = 0;
     s->packet_fin = 0;
-
+    s->is_monitoring_bw = 0;
     s->num_term_rc_windows = 100;
+    s->rc_index = 0;
 
     int i;
     char anno[MAX_NAME_LENGTH];
@@ -1308,7 +1309,7 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
     /* How much data has been transmitted on the virtual channel group within
     * the window */
     s->qos_data = (int*)calloc(num_qos_levels, sizeof(int));
-    s->vc_occupancy = (int*)calloc(s->num_vcs, sizeof(int));
+    s->vc_occupancy = (int*)calloc(num_qos_levels, sizeof(int));
 
     /* for reverse handlers */
     s->last_qos_status = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
@@ -1318,20 +1319,24 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
     {
        s->qos_data[i] = 0;
        s->qos_status[i] = Q_ACTIVE;
+       s->vc_occupancy[i] = 0;
     }
 
     s->last_qos_lvl = 0;
     s->last_buf_full = 0;
 
-    for (i = 0; i < s->num_vcs; i++) {
-        s->vc_occupancy[i] = 0;
-    }
-
     s->rank_tbl = NULL;
     s->terminal_msgs =
-        (terminal_plus_message_list **) calloc(s->num_vcs, sizeof(terminal_plus_message_list *));
+        (terminal_plus_message_list **) calloc(num_qos_levels, sizeof(terminal_plus_message_list *));
     s->terminal_msgs_tail =
-        (terminal_plus_message_list **) calloc(s->num_vcs, sizeof(terminal_plus_message_list *));
+        (terminal_plus_message_list **) calloc(num_qos_levels, sizeof(terminal_plus_message_list *));
+
+    for(int i = 0; i < num_qos_levels; i++)
+    {
+        s->terminal_msgs[i] = NULL;
+        s->terminal_msgs_tail[i] = NULL;
+    }
+
     s->terminal_length = (int*)calloc(num_qos_levels, sizeof(int));
     s->in_send_loop = 0;
     s->issueIdle = 0;
@@ -1887,6 +1892,7 @@ static void router_credit_send(router_state *s, terminal_plus_message *msg, tw_l
         buf_msg->magic = router_magic_num;
     }
 
+    buf_msg->origin_router_id = s->router_id;
     if (sq == -1) {
         buf_msg->vc_index = msg->vc_index;
         buf_msg->output_chan = msg->output_chan;
@@ -1916,6 +1922,9 @@ static void packet_generate_rc(terminal_state *s, tw_bf *bf, terminal_plus_messa
        codes_local_latency_reverse(lp);
 
     int num_qos_levels = s->params->num_qos_levels;
+    if(bf->c1)
+        s->is_monitoring_bw = 0;
+
     int num_chunks = msg->packet_size / s->params->chunk_size;
     if (msg->packet_size < s->params->chunk_size)
         num_chunks++;
@@ -2005,6 +2014,7 @@ static void packet_generate(terminal_state *s, tw_bf *bf, terminal_plus_message 
     if(src_grp_id == dest_grp_id)
     {
       if(dest_router_id == s->router_id)
+          //TODO: add RC stuff like in dragonfly-custom.C
           num_local_packets_sr++;
       else
           num_local_packets_sg++;
@@ -2230,7 +2240,7 @@ static void packet_send(terminal_state *s, tw_bf *bf, terminal_plus_message *msg
 
     m->type = R_ARRIVE;
     m->src_terminal_id = lp->gid;
-    m->vc_index = 0;
+    m->vc_index = vcg;
     m->last_hop = TERMINAL;
     m->magic = router_magic_num;
     m->path_type = -1;
@@ -2242,7 +2252,6 @@ static void packet_send(terminal_state *s, tw_bf *bf, terminal_plus_message *msg
 
 
     if (cur_entry->msg.chunk_id == num_chunks - 1 && (cur_entry->msg.local_event_size_bytes > 0)) {
-        bf->c2 = 1;
         msg->num_cll++;
         tw_stime local_ts = codes_local_latency(lp);
         tw_event *e_new = tw_event_new(cur_entry->msg.sender_lp, local_ts, lp);
@@ -2270,7 +2279,6 @@ static void packet_send(terminal_state *s, tw_bf *bf, terminal_plus_message *msg
 
     /* if there is another packet inline then schedule another send event */
     if (cur_entry != NULL && s->vc_occupancy[next_vcg] + s->params->chunk_size <= s->params->cn_vc_size) {
-        bf->c3 = 1;
         terminal_plus_message *m_new;
         msg->num_rngs++;
         ts += tw_rand_unif(lp->rng);
@@ -2891,6 +2899,9 @@ static void terminal_buf_update_rc(terminal_state *s, tw_bf *bf, terminal_plus_m
 /* update the compute node-router channel buffer */
 static void terminal_buf_update(terminal_state *s, tw_bf *bf, terminal_plus_message *msg, tw_lp *lp)
 {
+    msg->num_cll = 0;
+    msg->num_rngs = 0;
+    
     bf->c1 = 0;
     bf->c2 = 0;
     bf->c3 = 0;
@@ -3845,9 +3856,6 @@ static void router_packet_receive_rc(router_state *s, tw_bf *bf, terminal_plus_m
 {
     router_rev_ecount++;
     router_ecount--;
-
-    msg->num_cll = 0;
-    msg->num_rngs = 0;
     
     int output_port = msg->saved_vc;
     int output_chan = msg->saved_channel;
@@ -3901,7 +3909,7 @@ static void router_packet_receive(router_state *s, tw_bf *bf, terminal_plus_mess
     int num_qos_levels = s->params->num_qos_levels;
     int vcs_per_qos = s->params->num_vcs / num_qos_levels;
 
-    if(num_qos_levels > 1 && !s->is_monitoring_bw)
+    if(num_qos_levels > 1 && (s->is_monitoring_bw == 0))
     {
         bf->c1 = 1;
         msg->num_cll++;
@@ -4094,6 +4102,15 @@ static void router_packet_send_rc(router_state *s, tw_bf *bf, terminal_plus_mess
     terminal_plus_message_list *cur_entry = (terminal_plus_message_list *) rc_stack_pop(s->st);
     assert(cur_entry);
 
+    int vcg = get_vcg_from_category(&(cur_entry->msg));
+
+    int msg_size = s->params->chunk_size;
+    if(cur_entry->msg.packet_size < s->params->chunk_size)
+        msg_size = cur_entry->msg.packet_size;
+
+    s->qos_data[output_port][vcg] -= msg_size;
+    s->next_output_available_time[output_port] = msg->saved_available_time;
+
     if (bf->c11) {
         s->link_traffic[output_port] -= cur_entry->msg.packet_size % s->params->chunk_size;
         s->link_traffic_sample[output_port] -= cur_entry->msg.packet_size % s->params->chunk_size;
@@ -4102,7 +4119,6 @@ static void router_packet_send_rc(router_state *s, tw_bf *bf, terminal_plus_mess
         s->link_traffic[output_port] -= s->params->chunk_size;
         s->link_traffic_sample[output_port] -= s->params->chunk_size;
     }
-    s->next_output_available_time[output_port] = msg->saved_available_time;
 
     prepend_to_terminal_plus_message_list(s->pending_msgs[output_port], s->pending_msgs_tail[output_port],
                                           output_chan, cur_entry);
@@ -4184,7 +4200,7 @@ static void router_packet_send(router_state *s, tw_bf *bf, terminal_plus_message
     }
 
     uint64_t num_chunks = cur_entry->msg.packet_size / s->params->chunk_size;
-    if (msg->packet_size < s->params->chunk_size)
+    if (cur_entry->msg.packet_size < s->params->chunk_size)
         num_chunks++;
 
     double bytetime = delay;
@@ -4318,6 +4334,9 @@ static void router_buf_update_rc(router_state *s, tw_bf *bf, terminal_plus_messa
 /* Update the buffer space associated with this router LP */
 static void router_buf_update(router_state *s, tw_bf *bf, terminal_plus_message *msg, tw_lp *lp)
 {
+    msg->num_cll = 0;
+    msg->num_rngs = 0;
+
     int indx = msg->vc_index;
     int output_chan = msg->output_chan;
     s->vc_occupancy[indx][output_chan] -= s->params->chunk_size;
@@ -4333,6 +4352,8 @@ static void router_buf_update(router_state *s, tw_bf *bf, terminal_plus_message 
     }
     if (s->queued_msgs[indx][output_chan] != NULL) {
         bf->c1 = 1;
+        assert(indx < s->params->radix);
+        assert(output_chan < s->params->num_vcs);
         terminal_plus_message_list *head =
             return_head(s->queued_msgs[indx], s->queued_msgs_tail[indx], output_chan);
         router_credit_send(s, &head->msg, lp, 1, &(msg->num_rngs));
