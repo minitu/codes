@@ -2071,7 +2071,7 @@ static void packet_generate(terminal_state *s, tw_bf *bf, terminal_plus_message 
         s->terminal_length[vcg] += s->params->chunk_size;
     }
 
-    if (s->terminal_length[vcg] < 2 * s->params->cn_vc_size) {
+    if (s->terminal_length[vcg] < s->params->cn_vc_size) {
         model_net_method_idle_event(nic_ts, 0, lp);
     }
     else {
@@ -3883,9 +3883,6 @@ static void router_packet_receive_rc(router_state *s, tw_bf *bf, terminal_plus_m
         }
     }
     if (bf->c4) {
-        if (bf->c22) {
-            s->last_buf_full[output_port] = msg->saved_busy_time;
-        }
         delete_terminal_plus_message_list(
             return_tail(s->queued_msgs[output_port], s->queued_msgs_tail[output_port], output_chan));
         s->queued_count[output_port] -= s->params->chunk_size;
