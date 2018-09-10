@@ -3709,13 +3709,13 @@ static Connection do_dfp_routing(router_state *s,
 
 static void do_dfp_routing_rc(router_state *s, tw_bf *bf, terminal_plus_message *msg, tw_lp *lp, int fdest_router_id)
 {
-    for(int i = 0; i < msg->num_cll; i++) {
-        codes_local_latency_reverse(lp);
-      }
+    // for(int i = 0; i < msg->num_cll; i++) {
+    //     codes_local_latency_reverse(lp);
+    //   }
   
-    for(int i = 0; i < msg->num_rngs; i++) {
-        tw_rand_reverse_unif(lp->rng);
-      }
+    // for(int i = 0; i < msg->num_rngs; i++) {
+    //     tw_rand_reverse_unif(lp->rng);
+    //   }
     int my_group_id = s->router_id / s->params->num_routers;
     int fdest_group_id = fdest_router_id / s->params->num_routers;
 }
@@ -3870,8 +3870,8 @@ static void router_packet_receive_rc(router_state *s, tw_bf *bf, terminal_plus_m
       s->is_monitoring_bw = 0;
 
     //do dfp routing reverse
-    int dest_router_id = dragonfly_plus_get_assigned_router_id(msg->dfp_dest_terminal_id, s->params);
-    do_dfp_routing_rc(s, bf, msg, lp, dest_router_id);
+    // int dest_router_id = dragonfly_plus_get_assigned_router_id(msg->dfp_dest_terminal_id, s->params);
+    // do_dfp_routing_rc(s, bf, msg, lp, dest_router_id);
 
     if (bf->c2) {
         terminal_plus_message_list *tail =
