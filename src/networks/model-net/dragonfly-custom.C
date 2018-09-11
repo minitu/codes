@@ -271,9 +271,9 @@ struct terminal_state
    int * qos_status;
    int * qos_data;
 
-   int rc_index;
-   int* last_qos_status;
-   int* last_qos_data;
+//    int rc_index;
+//    int* last_qos_status;
+//    int* last_qos_data;
 
    int last_qos_lvl;
    int is_monitoring_bw;
@@ -391,8 +391,8 @@ struct router_state
    int group_id;
    int op_arr_size;
    int max_arr_size;
-   int rc_index;
-   int num_rtr_rc_windows;
+//    int rc_index;
+//    int num_rtr_rc_windows;
 
    int* global_channel; 
    
@@ -420,9 +420,9 @@ struct router_state
    int* last_qos_lvl;
    int** qos_status;
    int** qos_data;
-   /* for reverse handler */
-   int* last_qos_status;
-   int* last_qos_data;
+//    /* for reverse handler */
+//    int* last_qos_status;
+//    int* last_qos_data;
 
    const char * anno;
    const dragonfly_param *params;
@@ -1118,20 +1118,20 @@ void dragonfly_custom_report_stats()
 
 void issue_bw_monitor_event_rc(terminal_state * s, tw_bf * bf, terminal_custom_message * msg, tw_lp * lp)
 {
-    for(int i = 0 ; i < msg->num_cll; i++)
-        codes_local_latency_reverse(lp);
+    // for(int i = 0 ; i < msg->num_cll; i++)
+    //     codes_local_latency_reverse(lp);
     
-    int num_qos_levels = s->params->num_qos_levels;
-    int num_term_rc_wins = s->num_term_rc_windows;
-    int rc_index = msg->qos_index;
+    // int num_qos_levels = s->params->num_qos_levels;
+    // int num_term_rc_wins = s->num_term_rc_windows;
+    // int rc_index = msg->qos_index;
 
-    for(int k = 0; k < num_qos_levels; k++)
-    {
-        s->qos_status[k] = *(indexer2d(s->last_qos_status, rc_index, k, num_term_rc_wins, num_qos_levels));
-        s->qos_data[k] = *(indexer2d(s->last_qos_data, rc_index, k, num_term_rc_wins, num_qos_levels));
-        *(indexer2d(s->last_qos_status, rc_index, k, num_term_rc_wins, num_qos_levels)) = 0;
-        *(indexer2d(s->last_qos_data, rc_index, k, num_term_rc_wins, num_qos_levels)) = 0;
-    }
+    // for(int k = 0; k < num_qos_levels; k++)
+    // {
+    //     s->qos_status[k] = *(indexer2d(s->last_qos_status, rc_index, k, num_term_rc_wins, num_qos_levels));
+    //     s->qos_data[k] = *(indexer2d(s->last_qos_data, rc_index, k, num_term_rc_wins, num_qos_levels));
+    //     *(indexer2d(s->last_qos_status, rc_index, k, num_term_rc_wins, num_qos_levels)) = 0;
+    //     *(indexer2d(s->last_qos_data, rc_index, k, num_term_rc_wins, num_qos_levels)) = 0;
+    // }
 }
 /* resets the bandwidth numbers recorded so far */
 void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_custom_message * msg, tw_lp * lp)
@@ -1140,42 +1140,42 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_custom_mess
     msg->num_cll = 0;
     msg->num_rngs = 0;
     int num_qos_levels = s->params->num_qos_levels;
-    int rc_index = s->rc_index;
-    int num_term_rc_wins = s->num_term_rc_windows;
+    // int rc_index = s->rc_index;
+    // int num_term_rc_wins = s->num_term_rc_windows;
 
-    /* dynamically reallocate array if index has reached max-size */
-    if(s->rc_index >= s->num_term_rc_windows)
-    {
-        s->num_term_rc_windows *= 2;
-        int * tmp1 = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
-        int * tmp2 = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
+    // /* dynamically reallocate array if index has reached max-size */
+    // if(s->rc_index >= s->num_term_rc_windows)
+    // {
+    //     s->num_term_rc_windows *= 2;
+    //     int * tmp1 = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
+    //     int * tmp2 = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
         
-        /* now copy elements one by one. can't use memcpy with 2d array. */
-        for(int i = 0; i < s->num_term_rc_windows; i++)
-        {
-            for(int j = 0; j < num_qos_levels; j++)
-            {
-            *(indexer2d(tmp1, i, j,  s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_status, i, j,  num_term_rc_wins, num_qos_levels));
-            *(indexer2d(tmp2, i, j, s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_data, i, j,  num_term_rc_wins, num_qos_levels)); 
-            }
-        }
-       free(s->last_qos_status);
-       free(s->last_qos_data);
+    //     /* now copy elements one by one. can't use memcpy with 2d array. */
+    //     for(int i = 0; i < s->num_term_rc_windows; i++)
+    //     {
+    //         for(int j = 0; j < num_qos_levels; j++)
+    //         {
+    //         *(indexer2d(tmp1, i, j,  s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_status, i, j,  num_term_rc_wins, num_qos_levels));
+    //         *(indexer2d(tmp2, i, j, s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_data, i, j,  num_term_rc_wins, num_qos_levels)); 
+    //         }
+    //     }
+    //    free(s->last_qos_status);
+    //    free(s->last_qos_data);
 
-       s->last_qos_status = tmp1;
-       s->last_qos_data = tmp2;
-    }
-    /* Reset the qos status and bandwidth consumption. */
-    for(int k = 0; k < num_qos_levels; k++)
-    {
-        *(indexer2d(s->last_qos_status, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_status[k];
-        *(indexer2d(s->last_qos_data, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_data[k];
-        s->qos_status[k] = Q_ACTIVE;
-        s->qos_data[k] = 0;
-    }
-    msg->qos_index = s->rc_index;        
-    s->rc_index++;
-    assert(s->rc_index < s->num_term_rc_windows); 
+    //    s->last_qos_status = tmp1;
+    //    s->last_qos_data = tmp2;
+    // }
+    // /* Reset the qos status and bandwidth consumption. */
+    // for(int k = 0; k < num_qos_levels; k++)
+    // {
+    //     *(indexer2d(s->last_qos_status, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_status[k];
+    //     *(indexer2d(s->last_qos_data, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_data[k];
+    //     s->qos_status[k] = Q_ACTIVE;
+    //     s->qos_data[k] = 0;
+    // }
+    // msg->qos_index = s->rc_index;        
+    // s->rc_index++;
+    // assert(s->rc_index < s->num_term_rc_windows); 
     
 /*    if(s->router_id == 0)
     {
@@ -1198,22 +1198,22 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_custom_mess
 
 void issue_rtr_bw_monitor_event_rc(router_state * s, tw_bf * bf, terminal_custom_message * msg, tw_lp * lp)
 {
-    int num_qos_levels = s->params->num_qos_levels; 
-    int rc_index = msg->qos_index;
+    // int num_qos_levels = s->params->num_qos_levels; 
+    // // int rc_index = msg->qos_index;
 
-    for(int i = 0 ; i < msg->num_cll; i++)
-        codes_local_latency_reverse(lp);
+    // for(int i = 0 ; i < msg->num_cll; i++)
+    //     codes_local_latency_reverse(lp);
     
-    for(int j = 0; j < s->params->radix; j++)
-    {
-        for(int k = 0; k < num_qos_levels; k++)  
-        {
-            s->qos_status[j][k] = *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels));
-            s->qos_data[j][k] = *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels));
-            *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-            *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-        }
-    }
+    // for(int j = 0; j < s->params->radix; j++)
+    // {
+    //     for(int k = 0; k < num_qos_levels; k++)  
+    //     {
+    //         s->qos_status[j][k] = *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels));
+    //         s->qos_data[j][k] = *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels));
+    //         *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
+    //         *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
+    //     }
+    // }
 }
 void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_custom_message * msg, tw_lp * lp)
 {
@@ -1221,46 +1221,46 @@ void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_custom_me
     msg->num_rngs = 0;
 
     int num_qos_levels = s->params->num_qos_levels;
-    int rc_index = s->rc_index;
-    int num_rtr_rc_windows = s->num_rtr_rc_windows;
+    // int rc_index = s->rc_index;
+    // int num_rtr_rc_windows = s->num_rtr_rc_windows;
 
-    /* dynamically reallocate the array.. */
-    if(s->rc_index >= s->num_rtr_rc_windows)
-    {
-        s->num_rtr_rc_windows *= 2;
-        int * tmp1 = (int*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(int));
-        int * tmp2 = (int*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(int));
-        /* now copy elements one by one. can't use memcpy with 2d array. */
-        for(int i = 0; i < num_rtr_rc_windows; i++)
-        {
-            for(int j = 0; j < s->params->radix; j++)
-            {
-                for(int k = 0; k < num_qos_levels; k++)
-                {
-                      *(indexer3d(tmp1, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_status, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
-                      *(indexer3d(tmp2, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_data, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
-                }
-            }
-        }
-        free(s->last_qos_status);
-        free(s->last_qos_data);
+    // /* dynamically reallocate the array.. */
+    // if(s->rc_index >= s->num_rtr_rc_windows)
+    // {
+    //     s->num_rtr_rc_windows *= 2;
+    //     int * tmp1 = (int*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(int));
+    //     int * tmp2 = (int*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(int));
+    //     /* now copy elements one by one. can't use memcpy with 2d array. */
+    //     for(int i = 0; i < num_rtr_rc_windows; i++)
+    //     {
+    //         for(int j = 0; j < s->params->radix; j++)
+    //         {
+    //             for(int k = 0; k < num_qos_levels; k++)
+    //             {
+    //                   *(indexer3d(tmp1, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_status, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
+    //                   *(indexer3d(tmp2, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_data, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
+    //             }
+    //         }
+    //     }
+    //     free(s->last_qos_status);
+    //     free(s->last_qos_data);
 
-        s->last_qos_status = tmp1;
-        s->last_qos_data = tmp2;
-    }
-    assert(rc_index < s->num_rtr_rc_windows && rc_index >= 0);
+    //     s->last_qos_status = tmp1;
+    //     s->last_qos_data = tmp2;
+    // }
+    // assert(rc_index < s->num_rtr_rc_windows && rc_index >= 0);
    
-    for(int j = 0; j < s->params->radix; j++)
-    {
-        for(int k = 0; k < num_qos_levels; k++)
-        {
-                      *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_status[j][k];
-                      *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_data[j][k];
-        }
-    }
+    // for(int j = 0; j < s->params->radix; j++)
+    // {
+    //     for(int k = 0; k < num_qos_levels; k++)
+    //     {
+    //                   *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_status[j][k];
+    //                   *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_data[j][k];
+    //     }
+    // }
     
-    msg->qos_index = s->rc_index;
-    s->rc_index++;
+    // msg->qos_index = s->rc_index;
+    // s->rc_index++;
     
     for(int j = 0; j < s->params->radix; j++)
     {
@@ -1303,41 +1303,41 @@ void reset_rtr_bw_counters(router_state * s,
 		terminal_custom_message * msg, 
         tw_lp * lp)
 {
-    int num_qos_levels = s->params->num_qos_levels;
-    if(msg->type == R_BANDWIDTH)
-    {
-        for(int k = 0; k < s->num_rtr_rc_windows; k++)
-        {   
-            for(int i = 0; i < s->params->radix; i++)
-            {
-                for(int j = 0; j < num_qos_levels; j++)
-            {
-              *(indexer3d(s->last_qos_status, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-             *(indexer3d(s->last_qos_data, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-            }
-            }
-        }
-        s->rc_index = 0;
-    }
+    // int num_qos_levels = s->params->num_qos_levels;
+    // if(msg->type == R_BANDWIDTH)
+    // {
+    //     for(int k = 0; k < s->num_rtr_rc_windows; k++)
+    //     {   
+    //         for(int i = 0; i < s->params->radix; i++)
+    //         {
+    //             for(int j = 0; j < num_qos_levels; j++)
+    //         {
+    //           *(indexer3d(s->last_qos_status, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
+    //          *(indexer3d(s->last_qos_data, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
+    //         }
+    //         }
+    //     }
+    //     // s->rc_index = 0;
+    // }
 }
 void reset_bw_counters(terminal_state * s,
 		tw_bf * bf, 
 		terminal_custom_message * msg, 
         tw_lp * lp)
 {
-   int num_qos_levels = s->params->num_qos_levels;
-   if(msg->type == T_BANDWIDTH)
-   {
-        for(int i = 0; i < s->num_term_rc_windows; i++)
-        {
-            for(int j = 0; j < s->params->num_qos_levels; j++)
-            {
-              *(indexer2d(s->last_qos_status, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
-             *(indexer2d(s->last_qos_data, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
-            }
-        }
-        s->rc_index = 0; 
-   }
+//    int num_qos_levels = s->params->num_qos_levels;
+//    if(msg->type == T_BANDWIDTH)
+//    {
+//         for(int i = 0; i < s->num_term_rc_windows; i++)
+//         {
+//             for(int j = 0; j < s->params->num_qos_levels; j++)
+//             {
+//               *(indexer2d(s->last_qos_status, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
+//              *(indexer2d(s->last_qos_data, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
+//             }
+//         }
+//         // s->rc_index = 0; 
+//    }
 }
 /* initialize a dragonfly compute node terminal */
 void 
@@ -1348,7 +1348,7 @@ terminal_custom_init( terminal_state * s,
     s->packet_fin = 0;
     s->is_monitoring_bw = 0;
     s->num_term_rc_windows = 100;
-    s->rc_index = 0;
+    // s->rc_index = 0;
 
     int i;
     char anno[MAX_NAME_LENGTH];
@@ -1403,8 +1403,8 @@ terminal_custom_init( terminal_state * s,
    s->qos_data = (int*)calloc(num_qos_levels, sizeof(int));
 
    /* for reverse handlers */
-   s->last_qos_status = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
-   s->last_qos_data = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
+//    s->last_qos_status = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
+//    s->last_qos_data = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
    
    for(i = 0; i < num_qos_levels; i++)
    {
@@ -1482,8 +1482,8 @@ void router_custom_setup(router_state * r, tw_lp * lp)
    }
    //printf("\n Local router id %d global id %d ", r->router_id, lp->gid);
 
-   r->num_rtr_rc_windows = 100;
-   r->rc_index = 0;
+//    r->num_rtr_rc_windows = 100;
+//    r->rc_index = 0;
    r->is_monitoring_bw = 0;
    r->fwd_events = 0;
    r->rev_events = 0;
@@ -1494,8 +1494,8 @@ void router_custom_setup(router_state * r, tw_lp * lp)
    int num_qos_levels = p->num_qos_levels;
 
    /* history window for bandwidth reverse computation */
-   r->last_qos_status = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
-   r->last_qos_data = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
+//    r->last_qos_status = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
+//    r->last_qos_data = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
    
    r->global_channel = (int*)calloc(p->num_global_channels, sizeof(int));
    r->next_output_available_time = (tw_stime*)calloc(p->radix, sizeof(tw_stime));
