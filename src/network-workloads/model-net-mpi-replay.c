@@ -56,7 +56,7 @@ static int wrkld_id;
 static int num_net_traces = 0;
 static int priority_type = 0;
 static int num_dumpi_traces = 0;
-static int64_t EAGER_THRESHOLD = 8192;
+static int64_t EAGER_THRESHOLD = INT_MAX;
 
 static long num_ops = 0;
 static int upper_threshold = 1048576;
@@ -1557,7 +1557,7 @@ static void codes_exec_mpi_send(nw_state* s,
     bf->c3 = 0;
     bf->c1 = 0;
     bf->c4 = 0;
-    
+   
     char prio[12];
     if(priority_type == 0)
     {
@@ -1813,10 +1813,22 @@ static void send_ack_back(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp, m
     remote_m.fwd.matched_req = matched_req;
 
     char prio[12];
-    if(s->app_id == 0) 
-      strcpy(prio, "high");
-    else if(s->app_id == 1)
-       strcpy(prio, "medium");
+    if(priority_type == 0)
+    {
+        if(s->app_id == 0) 
+          strcpy(prio, "high");
+        else if(s->app_id == 1)
+          strcpy(prio, "medium");
+    }
+    else if(priority_type == 1)
+    {
+        if(mpi_op->tag == COL_TAG)
+        {
+            strcpy(prio, "high");
+        }
+        else
+            strcpy(prio, "medium");
+    }
     else
        tw_error(TW_LOC, "\n Invalid app id");
     
@@ -2057,7 +2069,6 @@ void nw_test_init(nw_state* s, tw_lp* lp)
        
    s->app_id = lid.job;
    s->local_rank = lid.rank;
-
 
    double overhead;
    int rc = configuration_get_value_double(&config, "PARAMS", "self_msg_overhead", NULL, &overhead);

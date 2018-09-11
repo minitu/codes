@@ -31,6 +31,7 @@
 #include <cortex/topology.h>
 #endif
 
+#define DEBUG_QOS 1
 #define DUMP_CONNECTIONS 0
 #define PRINT_CONFIG 1
 #define T_ID 1
@@ -1406,18 +1407,17 @@ void router_plus_setup(router_state *r, tw_lp *lp)
         assert(router_type_map[r->router_id] == LEAF);
         // printf("%lu: %i is a LEAF\n",lp->gid, r->router_id);
     }
-   
-    if(r->router_id == 0)
-    {
+#if DEBUG_QOS == 1 
         char rtr_bw_log[128];
-        sprintf(rtr_bw_log, "router-bw-tracker");
-        
-        dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w+");
+        sprintf(rtr_bw_log, "router-bw-tracker-%d", g_tw_mynode);
        
-        if(dragonfly_rtr_bw_log != NULL)
+        if(dragonfly_rtr_bw_log == NULL)
+        {
+            dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w+");
+       
            fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time");
-    } 
-
+        }
+#endif 
     r->connMan = &connManagerList[r->router_id];
 
     r->gc_usage = (int *) calloc(p->num_global_connections, sizeof(int));
@@ -1609,12 +1609,17 @@ void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_plus_mess
         for(int k = 0; k < num_qos_levels; k++)
         {
             int bw_consumed = get_rtr_bandwidth_consumption(s, k, j);
-            
-            if(s->router_id == 0)
+        
+#if DEBUG_QOS == 1 
+            if(dragonfly_rtr_bw_log != NULL)
             {
-                fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %d %d %d %f", s->router_id, tw_now(lp), j, k, bw_consumed, s->qos_status[j][k], s->qos_data[j][k], s->busy_time_sample[j]);
-            
+                if(s->qos_data[j][k] > 0)
+                {
+                    fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %d %d %d %f", s->router_id, tw_now(lp), j, k, bw_consumed, s->qos_status[j][k], s->qos_data[j][k], s->busy_time_sample[j]);
+                }
             }
+#endif 
+            
         }
     }
     for(int j = 0; j < s->params->radix; j++)
