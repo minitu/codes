@@ -56,7 +56,7 @@ static int wrkld_id;
 static int num_net_traces = 0;
 static int priority_type = 0;
 static int num_dumpi_traces = 0;
-static int64_t EAGER_THRESHOLD = INT_MAX;
+static int64_t EAGER_THRESHOLD = 8192;
 
 static long num_ops = 0;
 static int upper_threshold = 1048576;
