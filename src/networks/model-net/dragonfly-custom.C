@@ -708,7 +708,7 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params){
         fprintf(stderr, "Buffer size of local channels not specified, setting to %d\n", p->local_vc_size);
     }
 
-    rc = configuration_get_value_int(&config, "PARAMS", "qos_levels", anno, &p->num_qos_levels);
+    rc = configuration_get_value_int(&config, "PARAMS", "num_qos_levels", anno, &p->num_qos_levels);
     if(rc) {
         p->num_qos_levels = 1;
         fprintf(stderr, "Number of QOS levels not specified, setting to %d\n", p->num_qos_levels);
@@ -1267,7 +1267,7 @@ void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_custom_me
         for(int k = 0; k < num_qos_levels; k++)
         {
             int bw_consumed = get_rtr_bandwidth_consumption(s, k, j);
-            if(s->router_id == 0)
+            if(s->qos_data[j][k] > 0)
             {
                 fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %d %d %d %f", s->router_id, tw_now(lp), j, k, bw_consumed, s->qos_status[j][k], s->qos_data[j][k], s->busy_time_sample[j]);
             
@@ -1470,16 +1470,14 @@ void router_custom_setup(router_state * r, tw_lp * lp)
    r->router_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
    r->group_id=r->router_id/p->num_routers;
    
-   if(r->router_id == 0)
-   {
-        char rtr_bw_log[128];
-        sprintf(rtr_bw_log, "router-bw-tracker");
+   char rtr_bw_log[128];
+   sprintf(rtr_bw_log, "router-bw-tracker-%d", g_tw_mynode);
         
-        dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w");
+   dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w");
        
-        //if(dragonfly_rtr_bw_log != NULL)
-        //    fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time");
-   }
+   if(dragonfly_rtr_bw_log != NULL)
+           fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time");
+   
    //printf("\n Local router id %d global id %d ", r->router_id, lp->gid);
 
    r->num_rtr_rc_windows = 100;
