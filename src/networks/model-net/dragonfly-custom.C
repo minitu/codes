@@ -1165,14 +1165,14 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_custom_mess
     //    s->last_qos_status = tmp1;
     //    s->last_qos_data = tmp2;
     // }
-    // /* Reset the qos status and bandwidth consumption. */
-    // for(int k = 0; k < num_qos_levels; k++)
-    // {
-    //     *(indexer2d(s->last_qos_status, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_status[k];
-    //     *(indexer2d(s->last_qos_data, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_data[k];
-    //     s->qos_status[k] = Q_ACTIVE;
-    //     s->qos_data[k] = 0;
-    // }
+    /* Reset the qos status and bandwidth consumption. */
+    for(int k = 0; k < num_qos_levels; k++)
+    {
+        // *(indexer2d(s->last_qos_status, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_status[k];
+        // *(indexer2d(s->last_qos_data, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_data[k];
+        s->qos_status[k] = Q_ACTIVE;
+        s->qos_data[k] = 0;
+    }
     // msg->qos_index = s->rc_index;        
     // s->rc_index++;
     // assert(s->rc_index < s->num_term_rc_windows); 
