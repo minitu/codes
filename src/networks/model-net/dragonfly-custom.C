@@ -1470,14 +1470,15 @@ void router_custom_setup(router_state * r, tw_lp * lp)
    r->router_id = codes_mapping_get_lp_relative_id(lp->gid, 0, 0);
    r->group_id=r->router_id/p->num_routers;
    
-   char rtr_bw_log[128];
-   sprintf(rtr_bw_log, "router-bw-tracker-%d", g_tw_mynode);
-        
-   dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w");
-       
-   if(dragonfly_rtr_bw_log != NULL)
-           fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time");
-   
+    char rtr_bw_log[128];
+    sprintf(rtr_bw_log, "router-bw-tracker-%d", g_tw_mynode);
+
+    if(dragonfly_rtr_bw_log == NULL)
+    {
+        dragonfly_rtr_bw_log = fopen(rtr_bw_log, "w+");
+
+        fprintf(dragonfly_rtr_bw_log, "\n router-id time-stamp port-id qos-level bw-consumed qos-status qos-data busy-time");
+    }
    //printf("\n Local router id %d global id %d ", r->router_id, lp->gid);
 
 //    r->num_rtr_rc_windows = 100;
