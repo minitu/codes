@@ -662,6 +662,7 @@ void dragonfly_print_params(const dragonfly_param *p)
         printf("\tglobal_bandwidth =       %.2f\n",p->global_bandwidth);
         printf("\tcn_bandwidth =           %.2f\n",p->cn_bandwidth);
         printf("\tnum_vcs =                %d\n",p->num_vcs);
+        printf("\tnum_qos_levels =                %d\n",p->num_qos_levels);
         printf("\tlocal_vc_size =          %d\n",p->local_vc_size);
         printf("\tglobal_vc_size =         %d\n",p->global_vc_size);
         printf("\tcn_vc_size =             %d\n",p->cn_vc_size);
