@@ -29,6 +29,7 @@
         do {if (CS_LP_DBG) printf(_fmt, __VA_ARGS__);} while (0)
 #define MAX_STATS 65536
 #define COL_TAG 1235
+#define BAR_TAG 1234
 
 static int msg_size_hash_compare(
             void *key, struct qhash_head *link);
@@ -1568,7 +1569,7 @@ static void codes_exec_mpi_send(nw_state* s,
     }
     else if(priority_type == 1)
     {
-        if(mpi_op->u.send.tag == COL_TAG)
+        if(mpi_op->u.send.tag == COL_TAG || mpi_op->u.send.tag == BAR_TAG)
         {
             strcpy(prio, "high");
         }
@@ -1822,7 +1823,7 @@ static void send_ack_back(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp, m
     }
     else if(priority_type == 1)
     {
-        if(mpi_op->tag == COL_TAG)
+        if(mpi_op->tag == COL_TAG || mpi_op->tag == BAR_TAG)
         {
             strcpy(prio, "high");
         }
