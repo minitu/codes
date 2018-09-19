@@ -44,7 +44,7 @@ static int synthetic_pattern = 1;
 static int preserve_wait_ordering = 0;
 static int enable_msg_tracking = 0;
 static int is_synthetic = 0;
-static unsigned long max_gen_data = 1310720;
+static unsigned long long max_gen_data = 1310720;
 tw_lpid TRACK_LP = -1;
 int nprocs = 0;
 static double total_syn_data = 0;
@@ -114,11 +114,11 @@ FILE * workload_meta_log = NULL;
 
 static uint64_t sample_bytes_written = 0;
 
-long long num_bytes_sent=0;
-long long num_bytes_recvd=0;
+unsigned long long num_bytes_sent=0;
+unsigned long long num_bytes_recvd=0;
 
-long long num_syn_bytes_sent = 0;
-long long num_syn_bytes_recvd = 0;
+unsigned long long num_syn_bytes_sent = 0;
+unsigned long long num_syn_bytes_recvd = 0;
 
 double max_time = 0,  max_comm_time = 0, max_wait_time = 0, max_send_time = 0, max_recv_time = 0;
 double avg_time = 0, avg_comm_time = 0, avg_wait_time = 0, avg_send_time = 0, avg_recv_time = 0;
@@ -284,11 +284,11 @@ struct nw_state
 
     /* quick hash for maintaining message latencies */
 
-    unsigned long num_bytes_sent;
-    unsigned long num_bytes_recvd;
+    unsigned long long num_bytes_sent;
+    unsigned long long num_bytes_recvd;
 
-    unsigned long syn_data;
-    unsigned long gen_data;
+    unsigned long long syn_data;
+    unsigned long long gen_data;
   
     unsigned long prev_switch;
     int saved_perm_dest;
@@ -2698,7 +2698,7 @@ const tw_optdef app_opt [] =
 	TWOPT_UINT("num_net_traces", num_net_traces, "number of network traces"),
 	TWOPT_UINT("priority_type", priority_type, "Priority type (zero): high priority to foreground traffic and low to background/2nd job, (one): high priority to collective operations "),
 	TWOPT_UINT("payload_sz", payload_sz, "size of payload for synthetic traffic "),
-	TWOPT_ULONG("max_gen_data", max_gen_data, "maximum data to be generated for synthetic traffic "),
+	TWOPT_ULONGLONG("max_gen_data", max_gen_data, "maximum data to be generated for synthetic traffic "),
 	TWOPT_UINT("eager_threshold", EAGER_THRESHOLD, "the transition point for eager/rendezvous protocols (Default 8192)"),
     TWOPT_UINT("disable_compute", disable_delay, "disable compute simulation"),
     TWOPT_UINT("payload_sz", payload_sz, "size of the payload for synthetic traffic"),
