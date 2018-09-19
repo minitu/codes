@@ -313,7 +313,7 @@ struct terminal_state
     struct mn_stats dragonfly_stats_array[CATEGORY_MAX];
    
     int * qos_status;
-    int * qos_data;
+    unsigned long long * qos_data;
 
     // int num_term_rc_windows;
     // int rc_index;
@@ -325,7 +325,7 @@ struct terminal_state
 
     struct rc_stack *st;
     int issueIdle;
-    int * terminal_length;
+    unsigned long long * terminal_length;
 
     const char *anno;
     const dragonfly_plus_param *params;
@@ -503,7 +503,7 @@ struct router_state
     int is_monitoring_bw;
     int* last_qos_lvl;
     int** qos_status;
-    int** qos_data;
+    unsigned long long** qos_data;
     /* for reverse handler of qos */
     // int* last_qos_status;
     // int* last_qos_data;
@@ -1309,7 +1309,7 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
    
     /* How much data has been transmitted on the virtual channel group within
     * the window */
-    s->qos_data = (int*)calloc(num_qos_levels, sizeof(int));
+    s->qos_data = (unsigned long long*)calloc(num_qos_levels, sizeof(unsigned long long));
     s->vc_occupancy = (int*)calloc(num_qos_levels, sizeof(int));
 
     /* for reverse handlers */
@@ -1338,7 +1338,7 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
         s->terminal_msgs_tail[i] = NULL;
     }
 
-    s->terminal_length = (int*)calloc(num_qos_levels, sizeof(int));
+    s->terminal_length = (unsigned long long*)calloc(num_qos_levels, sizeof(unsigned long long));
     s->in_send_loop = 0;
     s->issueIdle = 0;
 
@@ -1428,7 +1428,7 @@ void router_plus_setup(router_state *r, tw_lp *lp)
     r->link_traffic_sample = (int64_t *) calloc(p->radix, sizeof(int64_t));
 
     r->vc_occupancy = (int **) calloc(p->radix, sizeof(int *));
-    r->qos_data = (int**)calloc(p->radix, sizeof(int*));
+    r->qos_data = (unsigned long long**)calloc(p->radix, sizeof(unsigned long long*));
     r->last_qos_lvl = (int*)calloc(p->radix, sizeof(int));
     r->qos_status = (int**)calloc(p->radix, sizeof(int*));
     r->in_send_loop = (int *) calloc(p->radix, sizeof(int));
@@ -1469,7 +1469,7 @@ void router_plus_setup(router_state *r, tw_lp *lp)
             (terminal_plus_message_list **) calloc(p->num_vcs, sizeof(terminal_plus_message_list *));
     
         r->qos_status[i] = (int*)calloc(num_qos_levels, sizeof(int));
-        r->qos_data[i] = (int*)calloc(num_qos_levels, sizeof(int));
+        r->qos_data[i] = (unsigned long long*)calloc(num_qos_levels, sizeof(unsigned long long));
     
         for(int j = 0; j < num_qos_levels; j++)
         {
