@@ -679,7 +679,6 @@ void dragonfly_plus_print_params(const dragonfly_plus_param *p)
     MPI_Comm_rank(MPI_COMM_CODES, &myRank);
     if (!myRank) { 
         printf("\n------------------ Dragonfly Plus Parameters ---------\n");
-        printf("\tnum_qos_levels =                 %d\n",p->num_qos_levels);
         printf("\tnum_routers =                 %d\n",p->num_routers);
         printf("\tlocal_bandwidth =             %.2f\n",p->local_bandwidth);
         printf("\tglobal_bandwidth =            %.2f\n",p->global_bandwidth);
@@ -691,6 +690,7 @@ void dragonfly_plus_print_params(const dragonfly_plus_param *p)
         printf("\tchunk_size =                  %d\n",p->chunk_size);
         printf("\tnum_cn =                      %d\n",p->num_cn);
         printf("\tintra_grp_radix =             %d\n",p->intra_grp_radix);
+        printf("\tnum_qos_levels =              %d\n",p->num_qos_levels);
         printf("\tnum_level_chans =             %d\n",p->num_level_chans);
         printf("\tnum_router_spine =            %d\n",p->num_router_spine);
         printf("\tnum_router_leaf =             %d\n",p->num_router_leaf);
