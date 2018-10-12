@@ -391,16 +391,21 @@ void model_net_base_configure(){
         offsetof(model_net_wrap_msg, msg.m_dfly_plus);
     msg_offsets[DRAGONFLY_PLUS_ROUTER] =
         offsetof(model_net_wrap_msg, msg.m_dfly_plus);
+    msg_offsets[DRAGONFLY_DALLY] =
+        offsetof(model_net_wrap_msg, msg.m_dally_dfly);
+    msg_offsets[DRAGONFLY_DALLY_ROUTER] =
+        offsetof(model_net_wrap_msg, msg.m_dally_dfly);
     msg_offsets[SLIMFLY] =
         offsetof(model_net_wrap_msg, msg.m_slim);
     msg_offsets[FATTREE] =
-	offsetof(model_net_wrap_msg, msg.m_fat);
+	    offsetof(model_net_wrap_msg, msg.m_fat);
     msg_offsets[LOGGP] =
         offsetof(model_net_wrap_msg, msg.m_loggp);
     msg_offsets[EXPRESS_MESH] =
         offsetof(model_net_wrap_msg, msg.m_em);
     msg_offsets[EXPRESS_MESH_ROUTER] =
         offsetof(model_net_wrap_msg, msg.m_em);
+
 
     // perform the configuration(s)
     // This part is tricky, as we basically have to look up all annotations that

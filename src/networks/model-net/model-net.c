@@ -25,6 +25,8 @@ extern struct model_net_method dragonfly_method;
 extern struct model_net_method dragonfly_custom_method;
 extern struct model_net_method dragonfly_plus_method;
 extern struct model_net_method dragonfly_plus_router_method;
+extern struct model_net_method dragonfly_dally_method;
+extern struct model_net_method dragonfly_dally_router_method;
 extern struct model_net_method slimfly_method;
 extern struct model_net_method fattree_method;
 extern struct model_net_method dragonfly_router_method;
