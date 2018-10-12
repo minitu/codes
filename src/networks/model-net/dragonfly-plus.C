@@ -31,7 +31,7 @@
 #include <cortex/topology.h>
 #endif
 
-#define DEBUG_QOS 1
+#define DEBUG_QOS 0
 #define DUMP_CONNECTIONS 0
 #define PRINT_CONFIG 1
 #define T_ID 1
@@ -220,7 +220,6 @@ struct dragonfly_plus_param
     int * qos_bandwidths;
 
     // dfp params start
-    int num_level_chans;   // number of channels between levels of the group(?)
     int num_router_spine;  // number of spine routers (top level)
     int num_router_leaf;   // number of leaf routers (bottom level)
     int adaptive_threshold;   // predefined queue length threshold T before a packet is routed through a lower priority queue
@@ -675,46 +674,41 @@ static terminal_plus_message_list *return_tail(terminal_plus_message_list **this
 
 void dragonfly_plus_print_params(const dragonfly_plus_param *p)
 {
-    int myRank;
-    MPI_Comm_rank(MPI_COMM_CODES, &myRank);
-    if (!myRank) { 
-        printf("\n------------------ Dragonfly Plus Parameters ---------\n");
-        printf("\tnum_routers =                 %d\n",p->num_routers);
-        printf("\tlocal_bandwidth =             %.2f\n",p->local_bandwidth);
-        printf("\tglobal_bandwidth =            %.2f\n",p->global_bandwidth);
-        printf("\tcn_bandwidth =                %.2f\n",p->cn_bandwidth);
-        printf("\tnum_vcs =                     %d\n",p->num_vcs);
-        printf("\tlocal_vc_size =               %d\n",p->local_vc_size);
-        printf("\tglobal_vc_size =              %d\n",p->global_vc_size);
-        printf("\tcn_vc_size =                  %d\n",p->cn_vc_size);
-        printf("\tchunk_size =                  %d\n",p->chunk_size);
-        printf("\tnum_cn =                      %d\n",p->num_cn);
-        printf("\tintra_grp_radix =             %d\n",p->intra_grp_radix);
-        printf("\tnum_qos_levels =              %d\n",p->num_qos_levels);
-        printf("\tnum_level_chans =             %d\n",p->num_level_chans);
-        printf("\tnum_router_spine =            %d\n",p->num_router_spine);
-        printf("\tnum_router_leaf =             %d\n",p->num_router_leaf);
-        printf("\tmax_port_score =              %ld\n",p->max_port_score);
-        printf("\tnum_groups =                  %d\n",p->num_groups);
-        printf("\tradix =                       %d\n",p->radix);
-        printf("\ttotal_routers =               %d\n",p->total_routers);
-        printf("\ttotal_terminals =             %d\n",p->total_terminals);
-        printf("\tnum_global_connections =      %d\n",p->num_global_connections);
-        printf("\tcn_delay =                    %.2f\n",p->cn_delay);
-        printf("\tlocal_delay =                 %.2f\n",p->local_delay);
-        printf("\tglobal_delay =                %.2f\n",p->global_delay);
-        printf("\tcredit_delay =                %.2f\n",p->credit_delay);
-        printf("\trouter_delay =                %.2f\n",p->router_delay);
-        printf("\tscoring =                     %d\n",scoring);
-        printf("\tadaptive_threshold =          %d\n",p->adaptive_threshold);
-        printf("\trouting =                     %d\n",routing);
-        printf("\tsource_leaf_consider_nonmin = %s\n", (p->source_leaf_consider_nonmin ? "true" : "false"));
-        printf("\tint_spine_consider_min =      %s\n", (p->int_spine_consider_min ? "true" : "false"));
-        printf("\tdest_spine_consider_nonmin =  %s\n", (p->dest_spine_consider_nonmin ? "true" : "false"));
-        printf("\tdest_spine_consider_gnonmin = %s\n", (p->dest_spine_consider_global_nonmin ? "true" : "false"));
-        printf("\tmax hops notification =       %d\n",p->max_hops_notify);
-        printf("------------------------------------------------------\n\n");
-    }
+    printf("\n------------------ Dragonfly Plus Parameters ---------\n");
+    printf("\tnum_routers =                 %d\n",p->num_routers);
+    printf("\tlocal_bandwidth =             %.2f\n",p->local_bandwidth);
+    printf("\tglobal_bandwidth =            %.2f\n",p->global_bandwidth);
+    printf("\tcn_bandwidth =                %.2f\n",p->cn_bandwidth);
+    printf("\tnum_vcs =                     %d\n",p->num_vcs);
+    printf("\tlocal_vc_size =               %d\n",p->local_vc_size);
+    printf("\tglobal_vc_size =              %d\n",p->global_vc_size);
+    printf("\tcn_vc_size =                  %d\n",p->cn_vc_size);
+    printf("\tchunk_size =                  %d\n",p->chunk_size);
+    printf("\tnum_cn =                      %d\n",p->num_cn);
+    printf("\tintra_grp_radix =             %d\n",p->intra_grp_radix);
+    printf("\tnum_qos_levels =              %d\n",p->num_qos_levels);
+    printf("\tnum_router_spine =            %d\n",p->num_router_spine);
+    printf("\tnum_router_leaf =             %d\n",p->num_router_leaf);
+    printf("\tmax_port_score =              %ld\n",p->max_port_score);
+    printf("\tnum_groups =                  %d\n",p->num_groups);
+    printf("\tvirtual radix =               %d\n",p->radix);
+    printf("\ttotal_routers =               %d\n",p->total_routers);
+    printf("\ttotal_terminals =             %d\n",p->total_terminals);
+    printf("\tnum_global_connections =      %d\n",p->num_global_connections);
+    printf("\tcn_delay =                    %.2f\n",p->cn_delay);
+    printf("\tlocal_delay =                 %.2f\n",p->local_delay);
+    printf("\tglobal_delay =                %.2f\n",p->global_delay);
+    printf("\tcredit_delay =                %.2f\n",p->credit_delay);
+    printf("\trouter_delay =                %.2f\n",p->router_delay);
+    printf("\tscoring =                     %d\n",scoring);
+    printf("\tadaptive_threshold =          %d\n",p->adaptive_threshold);
+    printf("\trouting =                     %d\n",routing);
+    printf("\tsource_leaf_consider_nonmin = %s\n", (p->source_leaf_consider_nonmin ? "true" : "false"));
+    printf("\tint_spine_consider_min =      %s\n", (p->int_spine_consider_min ? "true" : "false"));
+    printf("\tdest_spine_consider_nonmin =  %s\n", (p->dest_spine_consider_nonmin ? "true" : "false"));
+    printf("\tdest_spine_consider_gnonmin = %s\n", (p->dest_spine_consider_global_nonmin ? "true" : "false"));
+    printf("\tmax hops notification =       %d\n",p->max_hops_notify);
+    printf("------------------------------------------------------\n\n");
 }
 
 static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params)
@@ -735,19 +729,22 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     int rc = configuration_get_value_int(&config, "PARAMS", "local_vc_size", anno, &p->local_vc_size);
     if (rc) {
         p->local_vc_size = 1024;
-        fprintf(stderr, "Buffer size of local channels not specified, setting to %d\n", p->local_vc_size);
+        if(!myRank)
+            fprintf(stderr, "Buffer size of local channels not specified, setting to %d\n", p->local_vc_size);
     }
 
     rc = configuration_get_value_int(&config, "PARAMS", "global_vc_size", anno, &p->global_vc_size);
     if (rc) {
         p->global_vc_size = 2048;
-        fprintf(stderr, "Buffer size of global channels not specified, setting to %d\n", p->global_vc_size);
+        if(!myRank)
+            fprintf(stderr, "Buffer size of global channels not specified, setting to %d\n", p->global_vc_size);
     }
     
     rc = configuration_get_value_int(&config, "PARAMS", "num_qos_levels", anno, &p->num_qos_levels);
     if(rc) {
         p->num_qos_levels = 1;
-        fprintf(stderr, "Number of QOS levels not specified, setting to %d\n", p->num_qos_levels);
+        if(!myRank)
+            fprintf(stderr, "Number of QOS levels not specified, setting to %d\n", p->num_qos_levels);
     }
     
     char qos_levels_str[MAX_NAME_LENGTH];
@@ -766,7 +763,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
             total_bw += p->qos_bandwidths[i];
             if(p->qos_bandwidths[i] <= 0)
             {
-                tw_error(TW_LOC, "\n Invalid bandwidth levels");
+                tw_error(TW_LOC, "\nInvalid bandwidth levels\n");
             }
             i++;
             token = strtok(NULL,",");
@@ -778,38 +775,43 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
 
     rc = configuration_get_value_double(&config, "PARAMS", "max_qos_monitor", anno, &max_qos_monitor);
     if(rc) {
-        printf("\n Setting max_qos_monitor to %lf ", max_qos_monitor);
+        if(!myRank)
+            fprintf(stderr, "Setting max_qos_monitor to %lf\n", max_qos_monitor);
 	}
 
     rc = configuration_get_value_int(&config, "PARAMS", "cn_vc_size", anno, &p->cn_vc_size);
     if (rc) {
         p->cn_vc_size = 1024;
-        fprintf(stderr, "Buffer size of compute node channels not specified, setting to %d\n", p->cn_vc_size);
+        if(!myRank)
+            fprintf(stderr, "Buffer size of compute node channels not specified, setting to %d\n", p->cn_vc_size);
     }
 
     rc = configuration_get_value_int(&config, "PARAMS", "chunk_size", anno, &p->chunk_size);
     if (rc) {
         p->chunk_size = 512;
-        fprintf(stderr, "Chunk size for packets is specified, setting to %d\n", p->chunk_size);
+        if(!myRank)
+            fprintf(stderr, "Chunk size for packets is specified, setting to %d\n", p->chunk_size);
     }
 
     rc = configuration_get_value_double(&config, "PARAMS", "local_bandwidth", anno, &p->local_bandwidth);
     if (rc) {
         p->local_bandwidth = 5.25;
-        fprintf(stderr, "Bandwidth of local channels not specified, setting to %lf\n", p->local_bandwidth);
+        if(!myRank)
+            fprintf(stderr, "Bandwidth of local channels not specified, setting to %lf\n", p->local_bandwidth);
     }
 
     rc = configuration_get_value_double(&config, "PARAMS", "global_bandwidth", anno, &p->global_bandwidth);
     if (rc) {
         p->global_bandwidth = 4.7;
-        fprintf(stderr, "Bandwidth of global channels not specified, setting to %lf\n", p->global_bandwidth);
+        if(!myRank)
+            fprintf(stderr, "Bandwidth of global channels not specified, setting to %lf\n", p->global_bandwidth);
     }
 
     rc = configuration_get_value_double(&config, "PARAMS", "cn_bandwidth", anno, &p->cn_bandwidth);
     if (rc) {
         p->cn_bandwidth = 5.25;
-        fprintf(stderr, "Bandwidth of compute node channels not specified, setting to %lf\n",
-                p->cn_bandwidth);
+        if(!myRank)
+            fprintf(stderr, "Bandwidth of compute node channels not specified, setting to %lf\n", p->cn_bandwidth);
     }
 
     rc = configuration_get_value_double(&config, "PARAMS", "router_delay", anno, &p->router_delay);
@@ -833,20 +835,22 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     else if (strcmp(routing_str, "fully-prog-adaptive") == 0)
         routing = FULLY_PROG_ADAPTIVE;
     else {
-        fprintf(stderr, "No routing protocol specified, setting to minimal routing\n");
+        if(!myRank)
+            fprintf(stderr, "No routing protocol specified, setting to minimal routing\n");
         routing = MINIMAL;
     }
 
     rc = configuration_get_value_int(&config, "PARAMS", "notification_on_hops_greater_than", anno, &p->max_hops_notify);
     if (rc) {
-        printf("Maximum hops for notifying not specified, setting to INT MAX\n");
+        if(!myRank)
+            fprintf(stderr, "Maximum hops for notifying not specified, setting to INT MAX\n");
         p->max_hops_notify = INT_MAX;
     }
 
     int src_leaf_cons_choice;
     rc = configuration_get_value_int(&config, "PARAMS", "source_leaf_consider_nonmin", anno, &src_leaf_cons_choice);
     if (rc) {
-        printf("Source leaf consideration of nonmin ports not specified. Defaulting to True\n");
+        // fprintf(stderr, "Source leaf consideration of nonmin ports not specified. Defaulting to True\n");
         p->source_leaf_consider_nonmin = true;
     }
     else if (src_leaf_cons_choice == 1) {
@@ -859,7 +863,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     int int_spn_cons_choice;
     rc = configuration_get_value_int(&config, "PARAMS", "int_spine_consider_min", anno, &int_spn_cons_choice);
     if (rc) {
-        printf("Int spine consideration of min ports not specified. Defaulting to False\n");
+        // fprintf(stderr, "Int spine consideration of min ports not specified. Defaulting to False\n");
         p->int_spine_consider_min = false;
     }
     else if (int_spn_cons_choice == 1) {
@@ -871,7 +875,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     int dst_spn_cons_choice;
     rc = configuration_get_value_int(&config, "PARAMS", "dest_spine_consider_nonmin", anno, &dst_spn_cons_choice);
     if (rc) {
-        printf("Dest spine consideration of nonmin ports not specified. Defaulting to False");
+        // fprintf(stderr, "Dest spine consideration of nonmin ports not specified. Defaulting to False\n");
         p->dest_spine_consider_nonmin = false;
     }
     else if (dst_spn_cons_choice == 1) {
@@ -884,7 +888,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     int dst_spn_gcons_choice;
     rc = configuration_get_value_int(&config, "PARAMS", "dest_spine_consider_global_nonmin", anno, &dst_spn_gcons_choice);
     if (rc) {
-        printf("Dest spine consideration of global nonmin ports not specified. Defaulting to True");
+        // fprintf(stderr, "Dest spine consideration of global nonmin ports not specified. Defaulting to True\n");
         p->dest_spine_consider_global_nonmin = true;
     }
     else if (dst_spn_gcons_choice == 1) {
@@ -902,36 +906,30 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
 
     rc = configuration_get_value_int(&config, "PARAMS", "num_groups", anno, &p->num_groups);
     if (rc) {
-        printf("Number of groups not specified. Aborting");
-        MPI_Abort(MPI_COMM_CODES, 1);
+        tw_error(TW_LOC, "\nnum_groups not specified, Aborting\n");
     }
     rc = configuration_get_value_int(&config, "PARAMS", "num_router_spine", anno, &p->num_router_spine);
     if (rc) {
-        p->num_router_spine = 1;
+        tw_error(TW_LOC, "\nnum_router_spine not specified, Aborting\n");
     }
     rc = configuration_get_value_int(&config, "PARAMS", "num_router_leaf", anno, &p->num_router_leaf);
     if (rc) {
-        p->num_router_leaf = 1;
-    }
-    rc = configuration_get_value_int(&config, "PARAMS", "num_level_chans", anno, &p->num_level_chans);
-    if (rc) {
-        printf("\n Number of links connecting chassis not specified, setting to default value 1 ");
-        p->num_level_chans = 1;
+        tw_error(TW_LOC, "\nnum_router_leaf not specified, Aborting\n");
     }
 
     p->num_routers = p->num_router_spine + p->num_router_leaf;  // num routers per group
-    p->intra_grp_radix = (p->num_routers / 2) * p->num_level_chans;
+    p->intra_grp_radix = max(p->num_router_spine, p->num_router_leaf); //TODO: Is this sufficient? If there are parallel intra connecitons, this will break.
 
     rc = configuration_get_value_int(&config, "PARAMS", "num_cns_per_router", anno, &p->num_cn);
     if (rc) {
-        printf("\n Number of cns per router not specified, setting to %d ", 4);
+        if(!myRank)
+            fprintf(stderr,"Number of cns per router not specified, setting to %d\n", 4);
         p->num_cn = 4;
     }
 
     rc = configuration_get_value_int(&config, "PARAMS", "num_global_connections", anno, &p->num_global_connections);
     if (rc) {
-        printf("\n Number of global channels per router not specified, setting to 10 ");
-        p->num_global_connections = 10;
+        tw_error(TW_LOC, "\nnum_global_connections per router not specified, abortin...");
     }
     p->radix = p->intra_grp_radix + p->num_global_connections +
                p->num_cn;  // TODO this may not be sufficient, radix isn't same for leaf and spine routers
@@ -949,6 +947,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
         scoring_preference = LOWER;
     }
     else if (strcmp(scoring_str, "gamma") == 0) {
+        tw_error(TW_LOC, "Gamma scoring protocol currently non-functional"); //TODO: Fix gamma scoring protocol
         scoring = GAMMA;
         scoring_preference = HIGHER;
     }
@@ -957,14 +956,16 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
         scoring_preference = LOWER;
     }
     else {
-        fprintf(stderr, "No route scoring protocol specified, setting to alpha scoring\n");
+        if(!myRank)
+            fprintf(stderr, "No route scoring protocol specified, setting to alpha scoring\n");
         scoring = ALPHA;
         scoring_preference = LOWER;
     }
 
     rc = configuration_get_value_int(&config, "PARAMS", "adaptive_threshold", anno, &p->adaptive_threshold);
     if (rc) {
-        printf("Adaptive Minimal Routing Threshold not specified: setting to default = 0. (Will consider minimal and nonminimal routes based on scoring metric alone)");
+        if(!myRank)
+            fprintf(stderr, "Adaptive Minimal Routing Threshold not specified: setting to default = 0. (Will consider minimal and nonminimal routes based on scoring metric alone)\n");
         p->adaptive_threshold = 0;
     }
 
@@ -984,7 +985,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     char intraFile[MAX_NAME_LENGTH];
     configuration_get_value(&config, "PARAMS", "intra-group-connections", anno, intraFile, MAX_NAME_LENGTH);
     if (strlen(intraFile) <= 0) {
-        tw_error(TW_LOC, "Intra group connections file not specified. Aborting");
+        tw_error(TW_LOC, "\nIntra group connections file not specified. Aborting\n");
     }
 
     //setup Connection Managers for each router
@@ -1000,7 +1001,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
 
     FILE *groupFile = fopen(intraFile, "rb");
     if (!groupFile)
-        tw_error(TW_LOC, "intra-group file not found ");
+        tw_error(TW_LOC, "\nintra-group file not found\n");
 
     IntraGroupLink newLink;
     while (fread(&newLink, sizeof(IntraGroupLink), 1, groupFile) != 0) {
@@ -1031,7 +1032,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     char interFile[MAX_NAME_LENGTH];
     configuration_get_value(&config, "PARAMS", "inter-group-connections", anno, interFile, MAX_NAME_LENGTH);
     if (strlen(interFile) <= 0) {
-        tw_error(TW_LOC, "Inter group connections file not specified. Aborting");
+        tw_error(TW_LOC, "\nInter group connections file not specified. Aborting\n");
     }
     FILE *systemFile = fopen(interFile, "rb");
     if (!myRank) {
@@ -1085,7 +1086,7 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
 
     
     if (!myRank) {
-        printf("\n Total nodes %d routers %d groups %d routers per group %d radix %d\n",
+        printf("\nTotal nodes: %d,  Total routers: %d, Num groups: %d, Routers per group: %d, Virtual radix: %d\n",
                p->num_cn * p->num_router_leaf * p->num_groups, p->total_routers, p->num_groups, p->num_routers, p->radix);
     }
 
@@ -1094,8 +1095,13 @@ static void dragonfly_read_config(const char *anno, dragonfly_plus_param *params
     p->global_delay = bytes_to_ns(p->chunk_size, p->global_bandwidth);
     p->credit_delay = bytes_to_ns(CREDIT_SIZE, p->local_bandwidth);  // assume 8 bytes packet
 
-    if (PRINT_CONFIG)
-        dragonfly_plus_print_params(p);
+    fflush(stderr);
+    fflush(stdout);
+
+    if (PRINT_CONFIG) {
+        if(!myRank)
+            dragonfly_plus_print_params(p);
+    }
     stored_params = p;
 }
 
@@ -1153,16 +1159,16 @@ void dragonfly_plus_report_stats()
 
 
         printf(
-            " Average number of router hops traversed: %f; average chunk latency: %lf us; maximum chunk latency: %lf us; "
+            "Average number of router hops traversed: %f; average chunk latency: %lf us; maximum chunk latency: %lf us; "
             "avg message size: %lf bytes; finished messages: %lld; finished chunks: %lld \n",
             (float) avg_hops / total_finished_chunks, avg_time / (total_finished_chunks * 1000),
             max_time / 1000, (float) final_msg_sz / total_finished_msgs, total_finished_msgs,
             total_finished_chunks);
         if(isRoutingAdaptive(routing) || SHOW_ADAPTIVE_STATS) {
-            printf("\n ADAPTIVE ROUTING STATS: %d chunks routed minimally %d chunks routed non-minimally - completed packets: %lld \n",
+            printf("\nADAPTIVE ROUTING STATS: %d chunks routed minimally %d chunks routed non-minimally - completed packets: %lld \n",
                 total_minimal_packets, total_nonmin_packets, total_finished_chunks);
         }
-      printf("\n Total packets generated: %ld; finished: %ld; Locally routed: same router: %ld, different-router: %ld; Remote (inter-group): %ld \n", total_gen, total_fin, total_local_packets_sr, total_local_packets_sg, total_remote_packets);
+      printf("\nTotal packets generated: %ld; finished: %ld; Locally routed: same router: %ld, different-router: %ld; Remote (inter-group): %ld \n", total_gen, total_fin, total_local_packets_sr, total_local_packets_sg, total_remote_packets);
     }
     return;
 }
@@ -1217,10 +1223,10 @@ void reset_rtr_bw_counters(router_state * s,
             for(int i = 0; i < s->params->radix; i++)
             {
                 for(int j = 0; j < num_qos_levels; j++)
-            {
-              *(indexer3d(s->last_qos_status, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-             *(indexer3d(s->last_qos_data, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-            }
+                {
+                    *(indexer3d(s->last_qos_status, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
+                    *(indexer3d(s->last_qos_data, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
+                }
             }
         }
         s->rc_index = 0;
@@ -1231,19 +1237,20 @@ void reset_bw_counters(terminal_state * s,
 		terminal_plus_message * msg, 
         tw_lp * lp)
 {
-   int num_qos_levels = s->params->num_qos_levels;
-   if(msg->type == T_BANDWIDTH)
-   {
+    int num_qos_levels = s->params->num_qos_levels;
+    // printf("should woo");
+    if(msg->type == T_BANDWIDTH)
+    {
         for(int i = 0; i < s->num_term_rc_windows; i++)
         {
             for(int j = 0; j < s->params->num_qos_levels; j++)
             {
-              *(indexer2d(s->last_qos_status, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
-             *(indexer2d(s->last_qos_data, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
+                *(indexer2d(s->last_qos_status, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
+                *(indexer2d(s->last_qos_data, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
             }
         }
         s->rc_index = 0; 
-   }
+    }
 }
 /* initialize a dragonfly compute node terminal */
 void terminal_plus_init(terminal_state *s, tw_lp *lp)
@@ -1310,7 +1317,7 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
     /* How much data has been transmitted on the virtual channel group within
     * the window */
     s->qos_data = (unsigned long long*)calloc(num_qos_levels, sizeof(unsigned long long));
-    s->vc_occupancy = (int*)calloc(num_qos_levels, sizeof(int));
+    s->vc_occupancy = (int*)calloc(s->num_vcs, sizeof(int));
 
     /* for reverse handlers */
     s->last_qos_status = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
@@ -1320,7 +1327,11 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
     {
        s->qos_data[i] = 0;
        s->qos_status[i] = Q_ACTIVE;
-       s->vc_occupancy[i] = 0;
+    }
+
+    for(i = 0; i < s->num_vcs; i++)
+    {
+        s->vc_occupancy[i] = 0;
     }
 
     s->last_qos_lvl = 0;
@@ -1328,17 +1339,17 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
 
     s->rank_tbl = NULL;
     s->terminal_msgs =
-        (terminal_plus_message_list **) calloc(num_qos_levels, sizeof(terminal_plus_message_list *));
+        (terminal_plus_message_list **) calloc(s->num_vcs, sizeof(terminal_plus_message_list *));
     s->terminal_msgs_tail =
-        (terminal_plus_message_list **) calloc(num_qos_levels, sizeof(terminal_plus_message_list *));
+        (terminal_plus_message_list **) calloc(s->num_vcs, sizeof(terminal_plus_message_list *));
 
-    for(int i = 0; i < num_qos_levels; i++)
+    for(int i = 0; i < s->num_vcs; i++)
     {
         s->terminal_msgs[i] = NULL;
         s->terminal_msgs_tail[i] = NULL;
     }
 
-    s->terminal_length = (unsigned long long*)calloc(num_qos_levels, sizeof(unsigned long long));
+    s->terminal_length = (unsigned long long*)calloc(s->num_vcs, sizeof(unsigned long long));
     s->in_send_loop = 0;
     s->issueIdle = 0;
 
@@ -1390,10 +1401,10 @@ void router_plus_setup(router_state *r, tw_lp *lp)
 
     // QoS related variables
     // for reverse computation of QoS
-   /* history window for bandwidth reverse computation */
-   int num_qos_levels = p->num_qos_levels;
-   r->last_qos_status = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
-   r->last_qos_data = (unsigned long long*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(unsigned long long));
+    /* history window for bandwidth reverse computation */
+    int num_qos_levels = p->num_qos_levels;
+    r->last_qos_status = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
+    r->last_qos_data = (unsigned long long*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(unsigned long long));
 
     // Determine if router is a spine or a leaf
     int intra_group_id = r->router_id % p->num_routers;
@@ -1565,10 +1576,12 @@ void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_plus_mess
     int num_qos_levels = s->params->num_qos_levels;
     int rc_index = s->rc_index;
     int num_rtr_rc_windows = s->num_rtr_rc_windows;
+    // printf("rc_index = %d\n",rc_index);
 
     /* dynamically reallocate the array.. */
     if(s->rc_index >= s->num_rtr_rc_windows)
     {
+        // printf("Resizing to %d windows\n", s->num_rtr_rc_windows * 2);
         s->num_rtr_rc_windows *= 2;
         int * tmp1 = (int*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(int));
         unsigned long long * tmp2 = (unsigned long long*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(unsigned long long));
@@ -1579,8 +1592,8 @@ void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_plus_mess
             {
                 for(int k = 0; k < num_qos_levels; k++)
                 {
-                      *(indexer3d(tmp1, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_status, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
-                      *(indexer3d(tmp2, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_data, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
+                    *(indexer3d(tmp1, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_status, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
+                    *(indexer3d(tmp2, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_data, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
                 }
             }
         }
@@ -1596,8 +1609,8 @@ void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_plus_mess
     {
         for(int k = 0; k < num_qos_levels; k++)
         {
-                      *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_status[j][k];
-                      *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_data[j][k];
+            *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_status[j][k];
+            *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_data[j][k];
         }
     }
     
@@ -1685,15 +1698,15 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_plus_messag
         {
             for(int j = 0; j < num_qos_levels; j++)
             {
-            *(indexer2d(tmp1, i, j,  s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_status, i, j,  num_term_rc_wins, num_qos_levels));
-            *(indexer2d(tmp2, i, j, s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_data, i, j,  num_term_rc_wins, num_qos_levels)); 
+                *(indexer2d(tmp1, i, j,  s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_status, i, j,  num_term_rc_wins, num_qos_levels));
+                *(indexer2d(tmp2, i, j, s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_data, i, j,  num_term_rc_wins, num_qos_levels)); 
             }
         }
-       free(s->last_qos_status);
-       free(s->last_qos_data);
+        free(s->last_qos_status);
+        free(s->last_qos_data);
 
-       s->last_qos_status = tmp1;
-       s->last_qos_data = tmp2;
+        s->last_qos_status = tmp1;
+        s->last_qos_data = tmp2;
     }
     /* Reset the qos status and bandwidth consumption. */
     for(int k = 0; k < num_qos_levels; k++)
@@ -1728,53 +1741,52 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_plus_messag
 
 static int get_next_vcg(terminal_state * s, tw_bf * bf, terminal_plus_message * msg, tw_lp * lp)
 {
-  int num_qos_levels = s->params->num_qos_levels;
+    int num_qos_levels = s->params->num_qos_levels;
   
-  if(num_qos_levels == 1)
-  {
-      if(s->terminal_msgs[0] == NULL || s->vc_occupancy[0] + s->params->chunk_size > s->params->cn_vc_size)
-          return -1;
-      else
-          return 0;
-  }
+    if(num_qos_levels == 1)
+    {
+        if(s->terminal_msgs[0] == NULL || ((s->vc_occupancy[0] + s->params->chunk_size) > s->params->cn_vc_size))
+            return -1;
+        else
+            return 0;
+    }
 
   int bw_consumption[num_qos_levels];
 
-  /* First make sure the bandwidth consumptions are up to date. */
-  for(int k = 0; k < num_qos_levels; k++)
-  {
-    if(s->qos_status[k] != Q_OVERBW)
+    /* First make sure the bandwidth consumptions are up to date. */
+    for(int k = 0; k < num_qos_levels; k++)
     {
-        bw_consumption[k] = get_term_bandwidth_consumption(s, k);
-        if(bw_consumption[k] > s->params->qos_bandwidths[k]) 
+        if(s->qos_status[k] != Q_OVERBW)
         {
-            if(k == 0)
-                msg->qos_reset1 = 1;
-            else if(k == 1)
-                msg->qos_reset2 = 1;
-
-            s->qos_status[k] = Q_OVERBW;
+            bw_consumption[k] = get_term_bandwidth_consumption(s, k);
+            if(bw_consumption[k] > s->params->qos_bandwidths[k]) 
+            {
+                if(k == 0)
+                    msg->qos_reset1 = 1;
+                else if(k == 1)
+                    msg->qos_reset2 = 1;
+                
+                s->qos_status[k] = Q_OVERBW;
+            }
         }
     }
-  }
-  if(BW_MONITOR == 1)
-  {
-   for(int i = 0; i < num_qos_levels; i++)
-   {
-        if(s->qos_status[i] == Q_ACTIVE)
+    if(BW_MONITOR == 1)
+    {
+        for(int i = 0; i < num_qos_levels; i++)
         {
-            if(s->terminal_msgs[i] != NULL && s->vc_occupancy[i] + s->params->chunk_size <= s->params->cn_vc_size)
-               return i;
+            if(s->qos_status[i] == Q_ACTIVE)
+            {
+                if(s->terminal_msgs[i] != NULL && ((s->vc_occupancy[i] + s->params->chunk_size) <= s->params->cn_vc_size))
+                    return i;
+            }
         }
-   }
-  }
+    }
 
-
-   int next_rr_vcg = (s->last_qos_lvl + 1) % num_qos_levels;
-   /* All vcgs are exceeding their bandwidth limits*/
-   for(int i = 0; i < num_qos_levels; i++)
-   {
-        if(s->terminal_msgs[i] != NULL && s->vc_occupancy[i] + s->params->chunk_size <= s->params->cn_vc_size)
+    int next_rr_vcg = (s->last_qos_lvl + 1) % num_qos_levels;
+    /* All vcgs are exceeding their bandwidth limits*/
+    for(int i = 0; i < num_qos_levels; i++)
+    {
+        if(s->terminal_msgs[i] != NULL && ((s->vc_occupancy[i] + s->params->chunk_size) <= s->params->cn_vc_size))
         {
             bf->c2 = 1;
             
@@ -1785,8 +1797,8 @@ static int get_next_vcg(terminal_state * s, tw_bf * bf, terminal_plus_message * 
             return i;
         }
         next_rr_vcg = (next_rr_vcg + 1) % num_qos_levels;
-   }
-   return -1;
+    }
+    return -1;
 }
 
 /* MM: These packet events (packet_send, packet_receive etc.) will be used as is, basically, the routing
@@ -1971,35 +1983,28 @@ static void packet_generate(terminal_state *s, tw_bf *bf, terminal_plus_message 
     s->packet_gen++;
     
     int num_qos_levels = s->params->num_qos_levels;
+    int vcg = 0; //by default there's only one VC for terminals, VC0. There can be more based on the number of QoS levels
 
-    if(num_qos_levels > 1)
-    {
-          tw_lpid router_id;
-          codes_mapping_get_lp_info(lp->gid, lp_group_name, &mapping_grp_id, NULL,
-             &mapping_type_id, NULL, &mapping_rep_id, &mapping_offset);
-          codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, NULL, 0,
-            s->router_id / num_routers_per_mgrp, s->router_id % num_routers_per_mgrp, &router_id);
-       if(s->is_monitoring_bw == 0)
-        {
+    if (num_qos_levels > 1) {
+        tw_lpid router_id;
+        codes_mapping_get_lp_info(lp->gid, lp_group_name, &mapping_grp_id, NULL, &mapping_type_id, NULL, &mapping_rep_id, &mapping_offset);
+        codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, NULL, 0, s->router_id / num_routers_per_mgrp, s->router_id % num_routers_per_mgrp, &router_id);
+
+        if (s->is_monitoring_bw == 0) {
             bf->c1 = 1;
             /* Issue an event on both terminal and router to monitor bandwidth */
             msg->num_cll++;
             tw_stime bw_ts = bw_reset_window + codes_local_latency(lp);
             terminal_plus_message * m;
-            tw_event * e = model_net_method_event_new(lp->gid, bw_ts, lp, DRAGONFLY_PLUS,
-                (void**)&m, NULL);
+            tw_event * e = model_net_method_event_new(lp->gid, bw_ts, lp, DRAGONFLY_PLUS, (void**)&m, NULL);
             m->type = T_BANDWIDTH; 
             m->magic = terminal_magic_num;
             s->is_monitoring_bw = 1;
             tw_event_send(e);
         }
-   }
-  
-    int vcg = 0;
-    if(num_qos_levels > 1)
-    {
-       vcg = get_vcg_from_category(msg);
-       assert(vcg == Q_HIGH || vcg == Q_MEDIUM);
+
+        vcg = get_vcg_from_category(msg);
+        assert(vcg == Q_HIGH || vcg == Q_MEDIUM);
     }
     assert(vcg < num_qos_levels);
 
@@ -2069,7 +2074,7 @@ static void packet_generate(terminal_state *s, tw_bf *bf, terminal_plus_message 
                    msg->local_event_size_bytes);
         }
 
-        cur_chunk->msg.output_chan = vcg;
+        cur_chunk->msg.output_chan = vcg; //By default is 0 but QoS can mean more than just a single VC for terminals
         cur_chunk->msg.chunk_id = i;
         cur_chunk->msg.origin_router_id = s->router_id;
         append_to_terminal_plus_message_list(s->terminal_msgs, s->terminal_msgs_tail, vcg, cur_chunk);
@@ -2109,66 +2114,63 @@ static void packet_generate(terminal_state *s, tw_bf *bf, terminal_plus_message 
     return;
 }
 
-static void packet_send_rc(terminal_state * s, tw_bf * bf, terminal_plus_message * msg,
-        tw_lp * lp)
+static void packet_send_rc(terminal_state * s, tw_bf * bf, terminal_plus_message * msg, tw_lp * lp)
 {
-      int num_qos_levels = s->params->num_qos_levels;
-    
-      if(msg->qos_reset1)
-          s->qos_status[0] = Q_ACTIVE;
-      if(msg->qos_reset2)
-          s->qos_status[1] = Q_ACTIVE;
-      
-      if(msg->last_saved_qos)
-          s->last_qos_lvl = msg->last_saved_qos;
+    int num_qos_levels = s->params->num_qos_levels;
 
-      if(bf->c1) {
+    if(msg->qos_reset1)
+        s->qos_status[0] = Q_ACTIVE;
+    if(msg->qos_reset2)
+        s->qos_status[1] = Q_ACTIVE;
+    
+    if(msg->last_saved_qos)
+        s->last_qos_lvl = msg->last_saved_qos;
+
+    if(bf->c1) {
         s->in_send_loop = 1;
         if(bf->c3)
-         s->last_buf_full = msg->saved_busy_time;
-        
+            s->last_buf_full = msg->saved_busy_time;
         return;
-      }
+    }
      
-      for(int i = 0; i < msg->num_cll; i++) {
+    for(int i = 0; i < msg->num_cll; i++) 
+    {
         codes_local_latency_reverse(lp);
-      }
+    }
   
-      for(int i = 0; i < msg->num_rngs; i++)
-      {
+    for(int i = 0; i < msg->num_rngs; i++)
+    {
         tw_rand_reverse_unif(lp->rng);
-      }
-      int vcg = msg->saved_vc;
-      s->terminal_available_time = msg->saved_available_time;
-      
-      s->terminal_length[vcg] += s->params->chunk_size;
-      /*TODO: MM change this to the vcg */
-      s->vc_occupancy[vcg] -= s->params->chunk_size;
+    }
+    int vcg = msg->saved_vc;
+    s->terminal_available_time = msg->saved_available_time;
+    
+    s->terminal_length[vcg] += s->params->chunk_size;
+    /*TODO: MM change this to the vcg */
+    s->vc_occupancy[vcg] -= s->params->chunk_size;
 
-      terminal_plus_message_list* cur_entry = (terminal_plus_message_list *)rc_stack_pop(s->st);
-      
-      int data_size = s->params->chunk_size;
-      if(cur_entry->msg.packet_size < s->params->chunk_size)
-          data_size = cur_entry->msg.packet_size % s->params->chunk_size;
+    terminal_plus_message_list* cur_entry = (terminal_plus_message_list *)rc_stack_pop(s->st);
+    
+    int data_size = s->params->chunk_size;
+    if(cur_entry->msg.packet_size < s->params->chunk_size)
+        data_size = cur_entry->msg.packet_size % s->params->chunk_size;
 
-      s->qos_data[vcg] -= data_size;
+    s->qos_data[vcg] -= data_size;
 
-      prepend_to_terminal_plus_message_list(s->terminal_msgs, 
-              s->terminal_msgs_tail, vcg, cur_entry);
-      if(bf->c4) {
+    prepend_to_terminal_plus_message_list(s->terminal_msgs, 
+            s->terminal_msgs_tail, vcg, cur_entry);
+    if(bf->c4) {
         s->in_send_loop = 1;
-      }
-      if(bf->c5)
-      {
-          s->issueIdle = 1;
-          if(bf->c6)
-          {
+    }
+    if (bf->c5) {
+        s->issueIdle = 1;
+        if (bf->c6) {
             s->busy_time = msg->saved_total_time;
             s->last_buf_full = msg->saved_busy_time;
             s->busy_time_sample = msg->saved_sample_time;
-          }
-      }
-      return;
+        }
+    }
+    return;
 }
 /* sends the packet from the current dragonfly compute node to the attached router */
 static void packet_send(terminal_state *s, tw_bf *bf, terminal_plus_message *msg, tw_lp *lp)
@@ -2188,21 +2190,20 @@ static void packet_send(terminal_state *s, tw_bf *bf, terminal_plus_message *msg
     msg->num_cll = 0;
   
     if(num_qos_levels > 1)
-      vcg = get_next_vcg(s, bf, msg, lp);
+        vcg = get_next_vcg(s, bf, msg, lp);
   
-  /* For a terminal to router connection, there would be as many VCGs as number
-   * of VCs*/
+    /* For a terminal to router connection, there would be as many VCGs as number
+    * of VCs*/
 
     if(vcg == -1) {
-      bf->c1 = 1;
-      s->in_send_loop = 0;
-      if(!s->last_buf_full)
-      {
-        bf->c3 = 1;
-        msg->saved_busy_time = s->last_buf_full;
-        s->last_buf_full = tw_now(lp); 
-      }
-      return;
+        bf->c1 = 1;
+        s->in_send_loop = 0;
+        if(!s->last_buf_full) {
+            bf->c3 = 1;
+            msg->saved_busy_time = s->last_buf_full;
+            s->last_buf_full = tw_now(lp); 
+        }
+        return;
     }
     
 
@@ -2215,8 +2216,7 @@ static void packet_send(terminal_state *s, tw_bf *bf, terminal_plus_message *msg
         num_chunks++;
 
     tw_stime delay = s->params->cn_delay;
-    if ((cur_entry->msg.packet_size < s->params->chunk_size) && (cur_entry->msg.chunk_id == num_chunks - 1))
-    {
+    if ((cur_entry->msg.packet_size < s->params->chunk_size) && (cur_entry->msg.chunk_id == num_chunks - 1)) {
         data_size = cur_entry->msg.packet_size % s->params->chunk_size;
         delay = bytes_to_ns(cur_entry->msg.packet_size % s->params->chunk_size, s->params->cn_bandwidth);
     }
@@ -4103,8 +4103,10 @@ static void router_packet_send_rc(router_state *s, tw_bf *bf, terminal_plus_mess
 
     terminal_plus_message_list *cur_entry = (terminal_plus_message_list *) rc_stack_pop(s->st);
     assert(cur_entry);
-
-    int vcg = get_vcg_from_category(&(cur_entry->msg));
+    
+    int vcg = 0;
+    if (num_qos_levels > 1)
+        vcg = get_vcg_from_category(&(cur_entry->msg));
 
     int msg_size = s->params->chunk_size;
     if(cur_entry->msg.packet_size < s->params->chunk_size)
@@ -4183,7 +4185,9 @@ static void router_packet_send(router_state *s, tw_bf *bf, terminal_plus_message
       s->last_buf_full[output_port] = 0.0;
     }
 
-    int vcg = get_vcg_from_category(&(cur_entry->msg));
+    int vcg = 0;
+    if (num_qos_levels > 1)
+        vcg = get_vcg_from_category(&(cur_entry->msg));
 
     int to_terminal = 1, global = 0;
     double delay = s->params->cn_delay;
