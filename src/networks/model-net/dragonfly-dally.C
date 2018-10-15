@@ -76,7 +76,7 @@ static long num_remote_packets = 0;
 static int bw_reset_window = 5000000;
 
 #define indexer3d(_ptr, _x, _y, _z, _maxx, _maxy, _maxz) \
-        ((_ptr) + _z * (_maxx * _maxz) + _y * (_maxx) + _x)
+        ((_ptr) + _z * (_maxx * _maxy) + _y * (_maxx) + _x)
 
 #define indexer2d(_ptr, _x, _y, _maxx, _maxy) \
         ((_ptr) + _y * (_maxx) + _x)
