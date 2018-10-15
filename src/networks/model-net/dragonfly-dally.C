@@ -1425,10 +1425,10 @@ terminal_dally_init( terminal_state * s,
    s->rev_events = 0;
 
    rc_stack_create(&s->st);
-   s->vc_occupancy = (int*)calloc(num_qos_levels, sizeof(int));
+   s->vc_occupancy = (int*)calloc(num_qos_levels, sizeof(int)); //1 vc times the number of qos levels
    s->last_buf_full = 0.0;
 
-   s->terminal_length = (int*)calloc(num_qos_levels, sizeof(int));
+   s->terminal_length = (int*)calloc(num_qos_levels, sizeof(int)); //1 vc times number of qos levels
 
    /* Whether the virtual channel group is active or over-bw*/
    s->qos_status = (int*)calloc(num_qos_levels, sizeof(int));
@@ -4338,7 +4338,9 @@ static void router_packet_send_rc(router_state * s,
     terminal_dally_message_list * cur_entry = (terminal_dally_message_list *)rc_stack_pop(s->st);
     assert(cur_entry);
  
-    int vcg = get_vcg_from_category(&(cur_entry->msg));
+    int vcg = 0;
+    if(num_qos_levels > 1)
+        vcg = get_vcg_from_category(&(cur_entry->msg));
 
     int msg_size = s->params->chunk_size;
     if(cur_entry->msg.packet_size < s->params->chunk_size)
@@ -4425,7 +4427,10 @@ router_packet_send( router_state * s,
     s->last_buf_full[output_port] = 0.0;
   }
 
-  int vcg = get_vcg_from_category(&(cur_entry->msg));
+  int vcg = 0;
+  if(num_qos_levels > 1)
+    vcg = get_vcg_from_category(&(cur_entry->msg));
+    
   int to_terminal = 1, global = 0;
   double delay = s->params->cn_delay;
   double bandwidth = s->params->cn_bandwidth;
