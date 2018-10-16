@@ -314,11 +314,6 @@ struct terminal_state
     int * qos_status;
     unsigned long long* qos_data;
 
-    int num_term_rc_windows;
-    int rc_index;
-    int* last_qos_status;
-    unsigned long long* last_qos_data;
-
     int last_qos_lvl;
     int is_monitoring_bw;
 
@@ -497,15 +492,11 @@ struct router_state
     tw_stime *last_buf_full;
   
     /* qos related state variables */
-    int rc_index;
     int num_rtr_rc_windows;
     int is_monitoring_bw;
     int* last_qos_lvl;
     int** qos_status;
     unsigned long long** qos_data;
-    /* for reverse handler of qos */
-    int* last_qos_status;
-    unsigned long long* last_qos_data;
 
     tw_stime *busy_time;
     tw_stime *busy_time_sample;
@@ -1210,46 +1201,34 @@ int dragonfly_plus_get_assigned_router_id(int terminal_id, const dragonfly_plus_
     return router_id;
 }
 
-void reset_rtr_bw_counters(router_state * s,
+void router_plus_commit(router_state * s,
 		tw_bf * bf, 
 		terminal_plus_message * msg, 
         tw_lp * lp)
 {
-    int num_qos_levels = s->params->num_qos_levels;
     if(msg->type == R_BANDWIDTH)
     {
-        for(int k = 0; k < s->num_rtr_rc_windows; k++)
-        {   
-            for(int i = 0; i < s->params->radix; i++)
-            {
-                for(int j = 0; j < num_qos_levels; j++)
-                {
-                    *(indexer3d(s->last_qos_status, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-                    *(indexer3d(s->last_qos_data, k, i, j, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-                }
-            }
+        if(msg->rc_is_qos_set == 1) {
+            printf("free");
+            free(msg->rc_qos_data);
+            free(msg->rc_qos_status);
+            printf("'d\n");
         }
-        s->rc_index = 0;
     }
 }
-void reset_bw_counters(terminal_state * s,
+void terminal_plus_commit(terminal_state * s,
 		tw_bf * bf, 
 		terminal_plus_message * msg, 
         tw_lp * lp)
 {
-    int num_qos_levels = s->params->num_qos_levels;
-    // printf("should woo");
     if(msg->type == T_BANDWIDTH)
     {
-        for(int i = 0; i < s->num_term_rc_windows; i++)
-        {
-            for(int j = 0; j < s->params->num_qos_levels; j++)
-            {
-                *(indexer2d(s->last_qos_status, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
-                *(indexer2d(s->last_qos_data, i, j, s->num_term_rc_windows, num_qos_levels)) = 0;
-            }
+        if(msg->rc_is_qos_set == 1) {
+            printf("free");
+            free(msg->rc_qos_data);
+            free(msg->rc_qos_status);
+            printf("'d\n");
         }
-        s->rc_index = 0; 
     }
 }
 /* initialize a dragonfly compute node terminal */
@@ -1259,8 +1238,6 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
     s->packet_gen = 0;
     s->packet_fin = 0;
     s->is_monitoring_bw = 0;
-    s->num_term_rc_windows = 100;
-    s->rc_index = 0;
 
     int i;
     char anno[MAX_NAME_LENGTH];
@@ -1319,9 +1296,6 @@ void terminal_plus_init(terminal_state *s, tw_lp *lp)
     s->qos_data = (unsigned long long*)calloc(num_qos_levels, sizeof(unsigned long long));
     s->vc_occupancy = (int*)calloc(s->num_vcs, sizeof(int));
 
-    /* for reverse handlers */
-    s->last_qos_status = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
-    s->last_qos_data = (unsigned long long*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(unsigned long long));
     
     for(i = 0; i < num_qos_levels; i++)
     {
@@ -1394,17 +1368,12 @@ void router_plus_setup(router_state *r, tw_lp *lp)
     // printf("\n Local router id %d global id %d ", r->router_id, lp->gid);
 
     r->num_rtr_rc_windows = 100;
-    r->rc_index = 0;
     r->is_monitoring_bw = 0;
     r->fwd_events = 0;
     r->rev_events = 0;
 
     // QoS related variables
-    // for reverse computation of QoS
-    /* history window for bandwidth reverse computation */
     int num_qos_levels = p->num_qos_levels;
-    r->last_qos_status = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
-    r->last_qos_data = (unsigned long long*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(unsigned long long));
 
     // Determine if router is a spine or a leaf
     int intra_group_id = r->router_id % p->num_routers;
@@ -1548,104 +1517,83 @@ static int get_term_bandwidth_consumption(terminal_state * s, int qos_lvl)
 //    printf("\n At terminal %lf max bytes %d percent %d ", max_bytes_per_win, s->qos_data[qos_lvl], percent_bw);
     return percent_bw;
 }
-/* reverse handler for router BW monitor */
-void issue_rtr_bw_monitor_event_rc(router_state * s, tw_bf * bf, terminal_plus_message * msg, tw_lp * lp)
+
+void issue_rtr_bw_monitor_event_rc(router_state *s, tw_bf *bf, terminal_plus_message *msg, tw_lp *lp)
 {
-    int num_qos_levels = s->params->num_qos_levels; 
-    int rc_index = msg->qos_index;
+    int radix = s->params->radix;
+    int num_qos_levels = s->params->num_qos_levels;
 
     for(int i = 0 ; i < msg->num_cll; i++)
         codes_local_latency_reverse(lp);
-    
-    for(int j = 0; j < s->params->radix; j++)
+
+    for(int i = 0; i < radix; i++)
     {
-        for(int k = 0; k < num_qos_levels; k++)  
+        for(int j = 0; j < num_qos_levels; j++)
         {
-            s->qos_status[j][k] = *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels));
-            s->qos_data[j][k] = *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels));
-            *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
-            *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = 0;
+            s->qos_data[i][j] = *(indexer2d(msg->rc_qos_data, i, j, radix, num_qos_levels));
+            s->qos_status[i][j] = *(indexer2d(msg->rc_qos_status, i, j, radix, num_qos_levels));
         }
     }
+
+    free(msg->rc_qos_data);
+    free(msg->rc_qos_status);
 }
-void issue_rtr_bw_monitor_event(router_state * s, tw_bf * bf, terminal_plus_message * msg, tw_lp * lp)
+void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_plus_message *msg, tw_lp *lp)
 {
     msg->num_cll = 0;
     msg->num_rngs = 0;
 
+    int radix = s->params->radix;
     int num_qos_levels = s->params->num_qos_levels;
-    int rc_index = s->rc_index;
-    int num_rtr_rc_windows = s->num_rtr_rc_windows;
-    // printf("rc_index = %d\n",rc_index);
+    
 
-    /* dynamically reallocate the array.. */
-    if(s->rc_index >= s->num_rtr_rc_windows)
-    {
-        // printf("Resizing to %d windows\n", s->num_rtr_rc_windows * 2);
-        s->num_rtr_rc_windows *= 2;
-        int * tmp1 = (int*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(int));
-        unsigned long long * tmp2 = (unsigned long long*)calloc(s->num_rtr_rc_windows * s->params->radix * num_qos_levels, sizeof(unsigned long long));
-        /* now copy elements one by one. can't use memcpy with 2d array. */
-        for(int i = 0; i < num_rtr_rc_windows; i++)
-        {
-            for(int j = 0; j < s->params->radix; j++)
-            {
-                for(int k = 0; k < num_qos_levels; k++)
-                {
-                    *(indexer3d(tmp1, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_status, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
-                    *(indexer3d(tmp2, i, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = *(indexer3d(s->last_qos_data, i, j, k, num_rtr_rc_windows, s->params->radix, num_qos_levels));
-                }
-            }
-        }
-        free(s->last_qos_status);
-        free(s->last_qos_data);
+    //RC data storage start.
+    //Allocate memory here for these pointers that are stored in the events. FREE THESE IN RC OR IN COMMIT_F
+    msg->rc_qos_data = (unsigned long long *) calloc(radix * num_qos_levels, sizeof(unsigned long long));
+    msg->rc_qos_status = (int *) calloc(radix * num_qos_levels, sizeof(int));
 
-        s->last_qos_status = tmp1;
-        s->last_qos_data = tmp2;
-    }
-    assert(rc_index < s->num_rtr_rc_windows && rc_index >= 0);
-   
-    for(int j = 0; j < s->params->radix; j++)
+    //store qos data and status into the arrays. Pointers to the arrays are stored in events.
+    for(int i = 0; i < radix; i++)
     {
-        for(int k = 0; k < num_qos_levels; k++)
+        for(int j = 0; j < num_qos_levels; j++)
         {
-            *(indexer3d(s->last_qos_status, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_status[j][k];
-            *(indexer3d(s->last_qos_data, rc_index, j, k, s->num_rtr_rc_windows, s->params->radix, num_qos_levels)) = s->qos_data[j][k];
+            *(indexer2d(msg->rc_qos_data, i, j, radix, num_qos_levels)) = s->qos_data[i][j];
+            *(indexer2d(msg->rc_qos_status, i, j, radix, num_qos_levels)) = s->qos_status[i][j];
         }
     }
-    
-    msg->qos_index = s->rc_index;
-    s->rc_index++;
-    
-    for(int j = 0; j < s->params->radix; j++)
+    msg->rc_is_qos_set = 1;
+    //RC data storage end.
+
+
+    for(int i = 0; i < radix; i++)
     {
-        for(int k = 0; k < num_qos_levels; k++)
+        for(int j = 0; j < num_qos_levels; j++)
         {
-            int bw_consumed = get_rtr_bandwidth_consumption(s, k, j);
+            int bw_consumed = get_rtr_bandwidth_consumption(s, j, i);
         
-#if DEBUG_QOS == 1 
+            #if DEBUG_QOS == 1 
             if(dragonfly_rtr_bw_log != NULL)
             {
                 if(s->qos_data[j][k] > 0)
                 {
-                    fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %d %d %d %f", s->router_id, tw_now(lp), j, k, bw_consumed, s->qos_status[j][k], s->qos_data[j][k], s->busy_time_sample[j]);
+                    fprintf(dragonfly_rtr_bw_log, "\n %d %f %d %d %d %d %d %f", s->router_id, tw_now(lp), i, j, bw_consumed, s->qos_status[i][j], s->qos_data[i][j], s->busy_time_sample[i]);
                 }
             }
-#endif 
-            
+            #endif   
         }
     }
-    for(int j = 0; j < s->params->radix; j++)
+
+    /* Reset the qos status and bandwidth consumption. */
+    for(int i = 0; i < s->params->radix; i++)
     {
-        /* Reset the qos status and bandwidth consumption. */
-        for(int k = 0; k < num_qos_levels; k++)
+        for(int j = 0; j < num_qos_levels; j++)
         {
-            s->qos_status[j][k] = Q_ACTIVE;
-            s->qos_data[j][k] = 0;
+            s->qos_status[i][j] = Q_ACTIVE;
+            s->qos_data[i][j] = 0;
         }
-        s->busy_time_sample[j] = 0;
+        s->busy_time_sample[i] = 0;
     }
-    
+
     if(tw_now(lp) > max_qos_monitor)
         return;
     
@@ -1665,16 +1613,15 @@ void issue_bw_monitor_event_rc(terminal_state * s, tw_bf * bf, terminal_plus_mes
         codes_local_latency_reverse(lp);
     
     int num_qos_levels = s->params->num_qos_levels;
-    int num_term_rc_wins = s->num_term_rc_windows;
-    int rc_index = msg->qos_index;
-
-    for(int k = 0; k < num_qos_levels; k++)
+    
+    for(int i = 0; i < num_qos_levels; i++)
     {
-        s->qos_status[k] = *(indexer2d(s->last_qos_status, rc_index, k, num_term_rc_wins, num_qos_levels));
-        s->qos_data[k] = *(indexer2d(s->last_qos_data, rc_index, k, num_term_rc_wins, num_qos_levels));
-        *(indexer2d(s->last_qos_status, rc_index, k, num_term_rc_wins, num_qos_levels)) = 0;
-        *(indexer2d(s->last_qos_data, rc_index, k, num_term_rc_wins, num_qos_levels)) = 0;
+        s->qos_data[i] = msg->rc_qos_data[i];
+        s->qos_status[i] = msg->rc_qos_status[i];    
     }
+
+    free(msg->rc_qos_data);
+    free(msg->rc_qos_status);
 }
 /* resets the bandwidth numbers recorded so far */
 void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_plus_message * msg, tw_lp * lp)
@@ -1683,49 +1630,29 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_plus_messag
     msg->num_cll = 0;
     msg->num_rngs = 0;
     int num_qos_levels = s->params->num_qos_levels;
-    int rc_index = s->rc_index;
-    int num_term_rc_wins = s->num_term_rc_windows;
-
-    /* dynamically reallocate array if index has reached max-size */
-    if(s->rc_index >= s->num_term_rc_windows)
-    {
-        s->num_term_rc_windows *= 2;
-        int * tmp1 = (int*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(int));
-        unsigned long long * tmp2 = (unsigned long long*)calloc(s->num_term_rc_windows * num_qos_levels, sizeof(unsigned long long));
-        
-        /* now copy elements one by one. can't use memcpy with 2d array. */
-        for(int i = 0; i < s->num_term_rc_windows; i++)
-        {
-            for(int j = 0; j < num_qos_levels; j++)
-            {
-                *(indexer2d(tmp1, i, j,  s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_status, i, j,  num_term_rc_wins, num_qos_levels));
-                *(indexer2d(tmp2, i, j, s->num_term_rc_windows, num_qos_levels)) = *(indexer2d(s->last_qos_data, i, j,  num_term_rc_wins, num_qos_levels)); 
-            }
-        }
-        free(s->last_qos_status);
-        free(s->last_qos_data);
-
-        s->last_qos_status = tmp1;
-        s->last_qos_data = tmp2;
-    }
-    /* Reset the qos status and bandwidth consumption. */
-    for(int k = 0; k < num_qos_levels; k++)
-    {
-        *(indexer2d(s->last_qos_status, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_status[k];
-        *(indexer2d(s->last_qos_data, rc_index, k,  num_term_rc_wins, num_qos_levels)) = s->qos_data[k];
-        s->qos_status[k] = Q_ACTIVE;
-        s->qos_data[k] = 0;
-    }
-    msg->qos_index = s->rc_index;        
-    s->rc_index++;
-    assert(s->rc_index < s->num_term_rc_windows); 
     
-/*    if(s->router_id == 0)
+    //RC data storage start.
+    //Allocate memory here for these pointers that are stored in the events. FREE THESE IN RC OR IN COMMIT_F
+    msg->rc_qos_data = (unsigned long long *) calloc(num_qos_levels, sizeof(unsigned long long));
+    msg->rc_qos_status = (int *) calloc(num_qos_levels, sizeof(int));
+
+    //store qos data and status into the arrays. Pointers to the arrays are stored in events.
+    for(int i = 0; i < num_qos_levels; i++)
     {
-       fprintf(dragonfly_term_bw_log, "\n %d %lf %lf ", s->terminal_id, tw_now(lp), s->busy_time_sample);
-       s->busy_time_sample = 0;
+        msg->rc_qos_data[i] = s->qos_data[i];
+        msg->rc_qos_status[i] = s->qos_status[i];
     }
-  */  
+    msg->rc_is_qos_set = 1;
+    //RC data storage end.
+
+    /* Reset the qos status and bandwidth consumption. */
+    for(int i = 0; i < num_qos_levels; i++)
+    {
+        s->qos_status[i] = Q_ACTIVE;
+        s->qos_data[i] = 0;
+    }
+    
+
     if(tw_now(lp) > max_qos_monitor)
         return;
     
@@ -3031,8 +2958,10 @@ void dragonfly_plus_router_final(router_state *s, tw_lp *lp)
     //     printf("]\n");
     // }
 
+#if DEBUG_QOS
     if(s->router_id == 0)
         fclose(dragonfly_rtr_bw_log);
+#endif
 
     free(s->global_channel);
     int i, j;
@@ -4478,7 +4407,7 @@ tw_lptype dragonfly_plus_lps[] = {
         (pre_run_f) NULL,
         (event_f) terminal_plus_event,
         (revent_f) terminal_plus_rc_event_handler,
-        (commit_f) reset_bw_counters,
+        (commit_f) terminal_plus_commit,
         (final_f) dragonfly_plus_terminal_final,
         (map_f) codes_mapping,
         sizeof(terminal_state),
@@ -4488,7 +4417,7 @@ tw_lptype dragonfly_plus_lps[] = {
         (pre_run_f) NULL,
         (event_f) router_plus_event,
         (revent_f) router_plus_rc_event_handler,
-        (commit_f) reset_rtr_bw_counters,
+        (commit_f) router_plus_commit,
         (final_f) dragonfly_plus_router_final,
         (map_f) codes_mapping,
         sizeof(router_state),
