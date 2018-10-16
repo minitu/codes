@@ -1209,10 +1209,9 @@ void router_plus_commit(router_state * s,
     if(msg->type == R_BANDWIDTH)
     {
         if(msg->rc_is_qos_set == 1) {
-            printf("free");
             free(msg->rc_qos_data);
             free(msg->rc_qos_status);
-            printf("'d\n");
+            msg->rc_is_qos_set = 0;
         }
     }
 }
@@ -1224,10 +1223,9 @@ void terminal_plus_commit(terminal_state * s,
     if(msg->type == T_BANDWIDTH)
     {
         if(msg->rc_is_qos_set == 1) {
-            printf("free");
             free(msg->rc_qos_data);
             free(msg->rc_qos_status);
-            printf("'d\n");
+            msg->rc_is_qos_set = 0;
         }
     }
 }
@@ -1526,17 +1524,21 @@ void issue_rtr_bw_monitor_event_rc(router_state *s, tw_bf *bf, terminal_plus_mes
     for(int i = 0 ; i < msg->num_cll; i++)
         codes_local_latency_reverse(lp);
 
-    for(int i = 0; i < radix; i++)
+    if(msg->rc_is_qos_set == 1)
     {
-        for(int j = 0; j < num_qos_levels; j++)
+        for(int i = 0; i < radix; i++)
         {
-            s->qos_data[i][j] = *(indexer2d(msg->rc_qos_data, i, j, radix, num_qos_levels));
-            s->qos_status[i][j] = *(indexer2d(msg->rc_qos_status, i, j, radix, num_qos_levels));
+            for(int j = 0; j < num_qos_levels; j++)
+            {
+                s->qos_data[i][j] = *(indexer2d(msg->rc_qos_data, i, j, radix, num_qos_levels));
+                s->qos_status[i][j] = *(indexer2d(msg->rc_qos_status, i, j, radix, num_qos_levels));
+            }
         }
-    }
 
-    free(msg->rc_qos_data);
-    free(msg->rc_qos_status);
+        free(msg->rc_qos_data);
+        free(msg->rc_qos_status);
+        msg->rc_is_qos_set = 0;
+    }
 }
 void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_plus_message *msg, tw_lp *lp)
 {
@@ -1614,14 +1616,19 @@ void issue_bw_monitor_event_rc(terminal_state * s, tw_bf * bf, terminal_plus_mes
     
     int num_qos_levels = s->params->num_qos_levels;
     
-    for(int i = 0; i < num_qos_levels; i++)
+    if(msg->rc_is_qos_set == 1)
     {
-        s->qos_data[i] = msg->rc_qos_data[i];
-        s->qos_status[i] = msg->rc_qos_status[i];    
-    }
+        for(int i = 0; i < num_qos_levels; i++)
+        {
+            s->qos_data[i] = msg->rc_qos_data[i];
+            s->qos_status[i] = msg->rc_qos_status[i];    
+        }
 
-    free(msg->rc_qos_data);
-    free(msg->rc_qos_status);
+        free(msg->rc_qos_data);
+        free(msg->rc_qos_status);
+        msg->rc_is_qos_set = 0;
+    }
+    
 }
 /* resets the bandwidth numbers recorded so far */
 void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_plus_message * msg, tw_lp * lp)
