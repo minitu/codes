@@ -94,7 +94,6 @@ nobase_include_HEADERS = \
 	codes/connection-manager.h	\
 	codes/net/common-net.h \
 	codes/net/dragonfly.h \
-	codes/net/dragonfly-plus.h	\
 	codes/net/dragonfly-custom.h \
 	codes/net/dragonfly-dally.h \
 	codes/net/dragonfly-plus.h \
