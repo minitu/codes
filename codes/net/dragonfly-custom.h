@@ -75,9 +75,17 @@ struct terminal_custom_message
    model_net_event_return event_rc;
    int is_pull;
    uint32_t pull_size;
+   int path_type;
 
    /* for reverse computation */   
-   int path_type;
+   short num_rngs;
+   short num_cll;
+
+   int qos_index;
+   short last_saved_qos;
+   short qos_reset1;
+   short qos_reset2;
+
    tw_stime saved_available_time;
    tw_stime saved_avg_time;
    tw_stime saved_rcv_time;
