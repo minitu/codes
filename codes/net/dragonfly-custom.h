@@ -75,9 +75,9 @@ struct terminal_custom_message
    model_net_event_return event_rc;
    int is_pull;
    uint32_t pull_size;
-   int path_type;
 
    /* for reverse computation */   
+   int path_type;
    tw_stime saved_available_time;
    tw_stime saved_avg_time;
    tw_stime saved_rcv_time;
