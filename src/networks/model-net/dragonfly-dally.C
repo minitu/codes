@@ -1554,7 +1554,7 @@ void router_dally_setup(router_state * r, tw_lp * lp)
    r->queued_msgs_tail = 
     (terminal_dally_message_list***)calloc(p->radix, sizeof(terminal_dally_message_list**));
    r->queued_count = (int*)calloc(p->radix, sizeof(int));
-   r->last_buf_full = (tw_stime*)calloc(p->radix, sizeof(tw_stime*));
+   r->last_buf_full = (tw_stime*)calloc(p->radix, sizeof(tw_stime));
    r->busy_time = (tw_stime*)calloc(p->radix, sizeof(tw_stime));
    r->busy_time_sample = (tw_stime*)calloc(p->radix, sizeof(tw_stime));
 
