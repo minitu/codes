@@ -2983,13 +2983,13 @@ void dragonfly_plus_terminal_final(terminal_state *s, tw_lp *lp)
     lp_io_write(lp->gid, (char*)"dragonfly-plus-link-stats", written, s->output_buf);
 
 
-    if (s->terminal_id == 0) {
-        char meta_filename[64];
-        sprintf(meta_filename, "dragonfly-plus-cn-stats.meta");
+    // if (s->terminal_id == 0) {
+    //     char meta_filename[64];
+    //     sprintf(meta_filename, "dragonfly-plus-cn-stats.meta");
 
-        FILE * fp = fopen(meta_filename, "w+");
-        fprintf(fp, "# Format <LP id> <Terminal ID> <Total Data Size> <Avg packet latency> <# Flits/Packets finished> <Busy Time> <Max packet Latency> <Min packet Latency >\n");
-    }
+    //     FILE * fp = fopen(meta_filename, "w+");
+    //     fprintf(fp, "# Format <LP id> <Terminal ID> <Total Data Size> <Avg packet latency> <# Flits/Packets finished> <Busy Time> <Max packet Latency> <Min packet Latency >\n");
+    // }
    
     written = 0;
     written += sprintf(s->output_buf2 + written, "%llu %llu %lf %lf %lf %lf %llu %lf\n", 
@@ -3084,23 +3084,24 @@ void dragonfly_plus_router_final(router_state *s, tw_lp *lp)
 
     const dragonfly_plus_param *p = s->params;
     int written = 0;
-    int src_rel_id = s->router_id % p->num_routers;
-    int local_grp_id = s->router_id / p->num_routers;
 
-    for( int d = 0; d < p->intra_grp_radix; d++)
+    vector< Connection > my_local_links = s->connMan->get_connections_by_type(CONN_LOCAL);
+    for(vector<Connection>::iterator it = my_local_links.begin() ; it != my_local_links.end(); it++)
     {
-        if (d != src_rel_id) {
-            int dest_ab_id = local_grp_id * p->num_routers + d;
-            written += sprintf(s->output_buf + written, "\n%d %s %d %s %s %llu %lf",
-                s->router_id,
-                "R",
-                dest_ab_id,
-                "R",
-                "L",
-                s->link_traffic[d],
-                s->busy_time[d] );
-        }
+        int dest_rtr_id = it->dest_gid;
+        int port_no = it->port;
+        assert(port_no >= 0 && port_no < p->radix);
+        // Format <source_id> <source_type> <dest_id> < dest_type>  <link_type> <link_traffic> <link_saturation>
+        written += sprintf(s->output_buf + written, "\n%d %s %d %s %s %llu %lf",
+            s->router_id,
+            "R",
+            dest_rtr_id,
+            "R",
+            "L",
+            s->link_traffic[port_no],
+            s->busy_time[port_no] );
     }
+
 
     vector< Connection > my_global_links = s->connMan->get_connections_by_type(CONN_GLOBAL);
     vector< Connection >::iterator it = my_global_links.begin();
@@ -3110,6 +3111,7 @@ void dragonfly_plus_router_final(router_state *s, tw_lp *lp)
         int dest_rtr_id = it->dest_gid;
         int port_no = it->port;
         assert(port_no >= 0 && port_no < p->radix);
+        // Format <source_id> <source_type> <dest_id> < dest_type>  <link_type> <link_traffic> <link_saturation>
         written += sprintf(s->output_buf + written, "\n%d %s %d %s %s %llu %lf",
             s->router_id,
             "R",
