@@ -32,6 +32,8 @@
 #include <map>
 #include <set>
 
+#include "codes/connection-manager.h"
+
 #ifdef ENABLE_CORTEX
 #include <cortex/cortex.h>
 #include <cortex/topology.h>
@@ -88,17 +90,19 @@ struct Link {
 struct bLink {
     int offset, dest;
 };
-/* Each entry in the vector is for a router id
- * against each router id, there is a map of links (key of the map is the dest
- * router id)
- * link has information on type (green or black) and offset (number of links
- * between that particular source and dest router ID)*/
-static vector< map< int, vector<Link> > > intraGroupLinks;
-/* contains mapping between source router and destination group via link (link
- * has dest ID)*/
-static vector< map< int, vector<bLink> > > interGroupLinks;
+// /* Each entry in the vector is for a router id
+//  * against each router id, there is a map of links (key of the map is the dest
+//  * router id)
+//  * link has information on type (green or black) and offset (number of links
+//  * between that particular source and dest router ID)*/
+// static vector< map< int, vector<Link> > > intraGroupLinks;
+// /* contains mapping between source router and destination group via link (link
+//  * has dest ID)*/
+// static vector< map< int, vector<bLink> > > interGroupLinks;
 /*MM: Maintains a list of routers connecting the source and destination groups */
 static vector< vector< vector<int> > > connectionList;
+
+static vector< ConnectionManager > connManagerList;
 
 struct IntraGroupLink {
     int src, dest, type;
@@ -357,6 +361,23 @@ typedef enum qos_status
     Q_ACTIVE = 1,
     Q_OVERBW,
 } qos_status;
+
+// Used to denote whether a connection is one that would allow a packet to continue along a minimal path or not
+// Specifically used to clearly pass whether a connection is a minimal one through to the connection scoring function
+typedef enum conn_minimality_t
+{
+    C_MIN = 1,
+    C_NONMIN
+} conn_minimality_t;
+
+typedef enum route_scoring_metric_t
+{
+    ALPHA = 1, //Count queue lengths and pending messages for a port
+    BETA, //Expected Hops to Destination * (Count queue lengths and pending messages) for a port
+    GAMMA,
+    DELTA
+} route_scoring_metric_t;
+
 /* terminal event type (1-4) */
 typedef enum event_t
 {
@@ -407,6 +428,8 @@ struct router_state
     int num_rtr_rc_windows;
 
     int* global_channel; 
+
+    ConnectionManager *connMan; //manages and organizes connections from this router
     
     tw_stime* next_output_available_time;
     tw_stime* cur_hist_start_time;
@@ -486,6 +509,8 @@ st_model_types custom_dally_dragonfly_model_types[] = {
 /* End of ROSS model stats collection */
 
 static short routing = MINIMAL;
+static short scoring = ALPHA;
+
 
 static tw_stime         dragonfly_total_time = 0;
 static tw_stime         dragonfly_max_latency = 0;
@@ -865,6 +890,27 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
         routing = MINIMAL;
     }
 
+    char scoring_str[MAX_NAME_LENGTH];
+    configuration_get_value(&config, "PARAMS", "route_scoring_metric", anno, scoring_str, MAX_NAME_LENGTH);
+    if (strcmp(scoring_str, "alpha") == 0) {
+        scoring = ALPHA;
+    }
+    else if (strcmp(scoring_str, "beta") == 0) {
+        scoring = BETA;
+    }
+    else if (strcmp(scoring_str, "gamma") == 0) {
+        tw_error(TW_LOC, "Gamma scoring protocol currently non-functional"); //TODO: Fix gamma scoring protocol
+        scoring = GAMMA;
+    }
+    else if (strcmp(scoring_str, "delta") == 0) {
+        scoring = DELTA;
+    }
+    else {
+        if(!myRank)
+            fprintf(stderr, "No route scoring protocol specified, setting to DELTA scoring\n");
+        scoring = DELTA;
+    }
+
     rc = configuration_get_value_int(&config, "PARAMS", "notification_on_hops_greater_than", anno, &p->max_hops_notify);
     if (rc) {
         if(!myRank)
@@ -947,6 +993,18 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
     p->total_routers = p->num_groups * p->num_routers;
     p->total_terminals = p->total_routers * p->num_cn;
     
+
+    //setup Connection Managers for each router
+    for(int i = 0; i < p->total_routers; i++)
+    {
+        int src_id_global = i;
+        int src_id_local = i % p->num_routers;
+        int src_group = i / p->num_routers;
+
+        ConnectionManager conman = ConnectionManager(src_id_local, src_id_global, src_group, p->intra_grp_radix, p->num_global_channels, p->num_cn, p->num_routers);
+        connManagerList.push_back(conman);
+    }
+
     // read intra group connections, store from a router's perspective
     // all links to the same router form a vector
     char intraFile[MAX_NAME_LENGTH];
@@ -961,21 +1019,47 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
 
     if (!myRank)
       printf("Reading intra-group connectivity file: %s\n", intraFile);
-    {
-        vector< int > offsets;
-        offsets.resize(p->num_routers, 0);
-        intraGroupLinks.resize(p->num_routers);
-        IntraGroupLink newLink;
 
-      while(fread(&newLink, sizeof(IntraGroupLink), 1, groupFile) != 0) {
-            Link tmpLink;
-            tmpLink.type = newLink.type;
-            tmpLink.offset = offsets[newLink.src]++;
-            intraGroupLinks[newLink.src][newLink.dest].push_back(tmpLink);
-      }
+    IntraGroupLink newLink;
+    while (fread(&newLink, sizeof(IntraGroupLink), 1, groupFile) != 0 ) {
+        int src_id_local = newLink.src;
+        int dest_id_local = newLink.dest;
+
+        for(int i = 0; i < p->total_routers; i++)
+        {
+            int group_id = i/p->num_routers;
+            if (i % p->num_routers == src_id_local)
+            {
+                int dest_id_gloabl = group_id * p->num_routers + dest_id_local;
+                connManagerList[i].add_connection(dest_id_gloabl, CONN_LOCAL);
+            }
+        }
     }
-
     fclose(groupFile);
+
+    // {
+    //     vector< int > offsets;
+    //     offsets.resize(p->num_routers, 0);
+    //     intraGroupLinks.resize(p->num_routers);
+    //     IntraGroupLink newLink;
+
+    //   while(fread(&newLink, sizeof(IntraGroupLink), 1, groupFile) != 0) {
+    //         Link tmpLink;
+    //         tmpLink.type = newLink.type;
+    //         tmpLink.offset = offsets[newLink.src]++;
+    //         intraGroupLinks[newLink.src][newLink.dest].push_back(tmpLink);
+    //   }
+    // }
+
+    // fclose(groupFile);
+
+    //terminal assignment
+    for(int i = 0; i < p->total_terminals; i++)
+    {
+        int assigned_router_id = (int) i / p->num_cn;
+        int assigned_group_id = assigned_router_id / p->num_routers;
+        connManagerList[assigned_router_id].add_connection(i, CONN_TERMINAL);
+    }
 
     // read inter group connections, store from a router's perspective
     // also create a group level table that tells all the connecting routers
@@ -992,93 +1076,127 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
         printf("\n Total routers %d total groups %d ", p->total_routers, p->num_groups);
     }
 
-    {
-        vector< int > offsets;
-        offsets.resize(p->total_routers, 0);
-        interGroupLinks.resize(p->total_routers);
-        connectionList.resize(p->num_groups);
-        for(int g = 0; g < connectionList.size(); g++) {
-            connectionList[g].resize(p->num_groups);
-        }
-      
-        InterGroupLink newLink;
+    connectionList.resize(p->num_groups);
+    for(int g = 0; g < connectionList.size(); g++) {
+        connectionList[g].resize(p->num_groups);
+    }
 
-        while(fread(&newLink, sizeof(InterGroupLink), 1, systemFile) != 0) {
-            bLink tmpLink;
-            tmpLink.dest = newLink.dest;
-            int srcG = newLink.src / p->num_routers;
-            int destG = newLink.dest / p->num_routers;
-            tmpLink.offset = offsets[newLink.src]++;
-            interGroupLinks[newLink.src][destG].push_back(tmpLink);
-            int r;
-            for(r = 0; r < connectionList[srcG][destG].size(); r++) {
-            if(connectionList[srcG][destG][r] == newLink.src) break;
-            }
-            if(r == connectionList[srcG][destG].size()) {
-            connectionList[srcG][destG].push_back(newLink.src);
+    InterGroupLink newInterLink;
+    while (fread(&newInterLink, sizeof(InterGroupLink), 1, systemFile) != 0) {
+        int src_id_global = newInterLink.src;
+        int src_group_id = src_id_global / p->num_routers;
+        int dest_id_global = newInterLink.dest;
+        int dest_group_id = dest_id_global / p->num_routers;
+
+        connManagerList[src_id_global].add_connection(dest_id_global, CONN_GLOBAL);
+
+        int r;
+        for (r = 0; r < connectionList[src_group_id][dest_group_id].size(); r++) {
+            if (connectionList[src_group_id][dest_group_id][r] == newInterLink.src)
+                break;
+        }
+        if (r == connectionList[src_group_id][dest_group_id].size()) {
+            connectionList[src_group_id][dest_group_id].push_back(newInterLink.src);
+        }
+    }
+
+    if (DUMP_CONNECTIONS)
+    {
+        if (!myRank) {
+            for (int i = 0; i < connManagerList.size(); i++)
+            {
+                connManagerList[i].print_connections();
             }
         }
     }
+
+    // {
+    //     vector< int > offsets;
+    //     offsets.resize(p->total_routers, 0);
+    //     interGroupLinks.resize(p->total_routers);
+    //     connectionList.resize(p->num_groups);
+    //     for(int g = 0; g < connectionList.size(); g++) {
+    //         connectionList[g].resize(p->num_groups);
+    //     }
+      
+    //     InterGroupLink newLink;
+
+    //     while(fread(&newLink, sizeof(InterGroupLink), 1, systemFile) != 0) {
+    //         bLink tmpLink;
+    //         tmpLink.dest = newLink.dest;
+    //         int srcG = newLink.src / p->num_routers;
+    //         int destG = newLink.dest / p->num_routers;
+    //         tmpLink.offset = offsets[newLink.src]++;
+    //         interGroupLinks[newLink.src][destG].push_back(tmpLink);
+    //         int r;
+    //         for(r = 0; r < connectionList[srcG][destG].size(); r++) {
+    //         if(connectionList[srcG][destG][r] == newLink.src) break;
+    //         }
+    //         if(r == connectionList[srcG][destG].size()) {
+    //         connectionList[srcG][destG].push_back(newLink.src);
+    //         }
+    //     }
+    // }
 
     fclose(systemFile);
 
-#if DUMP_CONNECTIONS == 1
-if(!myRank) {
-    printf("Dumping intra-group connections\n");
-    for(int a = 0; a < intraGroupLinks.size(); a++) {
-        printf("Connections for router %d\n", a);
-        map< int, vector<Link> >  &curMap = intraGroupLinks[a];
-        map< int, vector<Link> >::iterator it = curMap.begin();
-        for(; it != curMap.end(); it++) {
-            printf(" ( %d - ", it->first);
-            for(int l = 0; l < it->second.size(); l++) {
-                // offset is number of local connections
-                // type is black or green according to Cray architecture 
-                printf("%d,%d ", it->second[l].offset, it->second[l].type);
-            }
-            printf(")");
-        }
-        printf("\n");
-    }
-}
-#endif
-#if DUMP_CONNECTIONS == 1
-if(!myRank) {
-    printf("Dumping inter-group connections\n");
-    for(int a = 0; a < interGroupLinks.size(); a++) {
-        printf("Connections for router %d\n", a);
-        map< int, vector<bLink> >  &curMap = interGroupLinks[a];
-        map< int, vector<bLink> >::iterator it = curMap.begin();
-        for(; it != curMap.end(); it++) {
-            // dest group ID 
-            printf(" ( %d - ", it->first);
-            for(int l = 0; l < it->second.size(); l++) {
-                // dest is dest router ID
-                // offset is number of global connections
-                printf("%d,%d ", it->second[l].offset, it->second[l].dest);
-            }
-            printf(")");
-        }
-        printf("\n");
-    }
-}
-#endif
+// #if DUMP_CONNECTIONS == 1
+// if(!myRank) {
+//     printf("Dumping intra-group connections\n");
+//     for(int a = 0; a < intraGroupLinks.size(); a++) {
+//         printf("Connections for router %d\n", a);
+//         map< int, vector<Link> >  &curMap = intraGroupLinks[a];
+//         map< int, vector<Link> >::iterator it = curMap.begin();
+//         for(; it != curMap.end(); it++) {
+//             printf(" ( %d - ", it->first);
+//             for(int l = 0; l < it->second.size(); l++) {
+//                 // offset is number of local connections
+//                 // type is black or green according to Cray architecture 
+//                 printf("%d,%d ", it->second[l].offset, it->second[l].type);
+//             }
+//             printf(")");
+//         }
+//         printf("\n");
+//     }
+// }
+// #endif
+// #if DUMP_CONNECTIONS == 1
+// if(!myRank) {
+//     printf("Dumping inter-group connections\n");
+//     for(int a = 0; a < interGroupLinks.size(); a++) {
+//         printf("Connections for router %d\n", a);
+//         map< int, vector<bLink> >  &curMap = interGroupLinks[a];
+//         map< int, vector<bLink> >::iterator it = curMap.begin();
+//         for(; it != curMap.end(); it++) {
+//             // dest group ID 
+//             printf(" ( %d - ", it->first);
+//             for(int l = 0; l < it->second.size(); l++) {
+//                 // dest is dest router ID
+//                 // offset is number of global connections
+//                 printf("%d,%d ", it->second[l].offset, it->second[l].dest);
+//             }
+//             printf(")");
+//         }
+//         printf("\n");
+//     }
+// }
+// #endif
 
-#if DUMP_CONNECTIONS == 1
-if(!myRank) {
-    printf("Dumping source aries for global connections\n");
-    for(int g = 0; g < p->num_groups; g++) {
-        for(int g1 = 0; g1 < p->num_groups; g1++) {
-            printf(" ( ");
-            for(int l = 0; l < connectionList[g][g1].size(); l++) {
-                printf("%d ", connectionList[g][g1][l]);
-            }
-            printf(")");
-        }
-        printf("\n");
-    }
-}
-#endif
+// #if DUMP_CONNECTIONS == 1
+// if(!myRank) {
+//     printf("Dumping source aries for global connections\n");
+//     for(int g = 0; g < p->num_groups; g++) {
+//         for(int g1 = 0; g1 < p->num_groups; g1++) {
+//             printf(" ( ");
+//             for(int l = 0; l < connectionList[g][g1].size(); l++) {
+//                 printf("%d ", connectionList[g][g1][l]);
+//             }
+//             printf(")");
+//         }
+//         printf("\n");
+//     }
+// }
+// #endif
     if(!myRank) {
         printf("\n Total nodes %d routers %d groups %d routers per group %d radix %d\n",
                 p->num_cn * p->total_routers, p->total_routers, p->num_groups,
@@ -1540,6 +1658,8 @@ void router_dally_setup(router_state * r, tw_lp * lp)
     r->last_qos_status = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
     r->last_qos_data = (int*)calloc(r->num_rtr_rc_windows * r->params->radix * num_qos_levels, sizeof(int));
     
+    r->connMan = &connManagerList[r->router_id];
+
     r->global_channel = (int*)calloc(p->num_global_channels, sizeof(int));
     r->next_output_available_time = (tw_stime*)calloc(p->radix, sizeof(tw_stime));
     r->cur_hist_start_time = (tw_stime*)calloc(p->radix, sizeof(tw_stime));
@@ -1624,7 +1744,10 @@ void router_dally_setup(router_state * r, tw_lp * lp)
             r->queued_msgs_tail[i][j] = NULL;
         }
     }
-   return;
+
+    r->connMan->solidify_connections();
+
+    return;
 }	
 
 
@@ -1663,6 +1786,7 @@ static tw_stime dragonfly_dally_packet_event(
     msg->local_event_size_bytes = 0;
     msg->type = T_GENERATE;
     msg->dest_terminal_id = req->dest_mn_lp;
+    msg->dfdally_dest_terminal_id = codes_mapping_get_lp_relative_id(msg->dest_terminal_id,0,0);
     msg->message_id = req->msg_id;
     msg->is_pull = req->is_pull;
     msg->pull_size = req->pull_size;
@@ -3255,28 +3379,47 @@ void dragonfly_dally_router_final(router_state * s, tw_lp * lp)
         }
     }
 
-    map< int, vector<bLink> >  &curMap = interGroupLinks[s->router_id];
-    map< int, vector<bLink> >::iterator it = curMap.begin();
-    for(; it != curMap.end(); it++)
+    vector< Connection > my_global_links = s->connMan->get_connections_by_type(CONN_GLOBAL);
+    vector< Connection >::iterator it = my_global_links.begin();
+
+    for(; it != my_global_links.end(); it++)
     {
-        /* TODO: Works only for single global connections right now. Make it functional
-            * for a 2-D dragonfly. */
-        for(int l = 0; l < it->second.size(); l++) 
-        {
-            int dest_rtr_id = it->second[l].dest;
-            int offset = it->second[l].offset;
-            assert(offset >= 0 && offset < p->num_global_channels);
-            written += sprintf(s->output_buf + written, "\n%d %s %d %s %s %llu %lf %lu", 
-                s->router_id,
-                "R",
-                dest_rtr_id,
-                "R",
-                "G",
-                s->link_traffic[offset],
-                s->busy_time[offset],
-                s->stalled_chunks[offset]);
-        }
-    }    
+        int dest_rtr_id = it->dest_gid;
+        int port_no = it->port;
+        assert(port_no >= 0 && port_no < p->radix);
+        written += sprintf(s->output_buf + written, "\n%d %s %d %s %s %llu %lf %lu",
+            s->router_id,
+            "R",
+            dest_rtr_id,
+            "R",
+            "G",
+            s->link_traffic[port_no],
+            s->busy_time[port_no],
+            s->stalled_chunks[port_no]);
+    }
+
+    // map< int, vector<bLink> >  &curMap = interGroupLinks[s->router_id];
+    // map< int, vector<bLink> >::iterator it = curMap.begin();
+    // for(; it != curMap.end(); it++)
+    // {
+    //     /* TODO: Works only for single global connections right now. Make it functional
+    //         * for a 2-D dragonfly. */
+    //     for(int l = 0; l < it->second.size(); l++) 
+    //     {
+    //         int dest_rtr_id = it->second[l].dest;
+    //         int offset = it->second[l].offset;
+    //         assert(offset >= 0 && offset < p->num_global_channels);
+    //         written += sprintf(s->output_buf + written, "\n%d %s %d %s %s %llu %lf %lu", 
+    //             s->router_id,
+    //             "R",
+    //             dest_rtr_id,
+    //             "R",
+    //             "G",
+    //             s->link_traffic[offset],
+    //             s->busy_time[offset],
+    //             s->stalled_chunks[offset]);
+    //     }
+    // }    
     
     sprintf(s->output_buf + written, "\n");
     lp_io_write(lp->gid, (char*)"dragonfly-link-stats", written, s->output_buf);
@@ -3305,59 +3448,6 @@ void dragonfly_dally_router_final(router_state * s, tw_lp * lp)
     }
 }
 
-static vector<int> get_intra_router(router_state * s, int src_router_id, int dest_router_id, int num_rtrs_per_grp)
-{
-    /* Check for intra-group connections */
-    int src_rel_id = src_router_id % num_rtrs_per_grp;
-    int dest_rel_id = dest_router_id % num_rtrs_per_grp;
-
-    int group_id = src_router_id / num_rtrs_per_grp;
-
-    map< int, vector<Link> >  &curMap = intraGroupLinks[src_rel_id];
-    map< int, vector<Link> >::iterator it_src = curMap.begin();
-    int offset = group_id * num_rtrs_per_grp;
-    vector<int> intersection;
-
-    /* If no direct connection exists then find an intermediate connection */
-    if(curMap.find(dest_rel_id) == curMap.end())
-    {
-        assert(0);
-        int src_col = src_rel_id % s->params->num_router_cols;
-        int src_row = src_rel_id / s->params->num_router_cols;
-
-        int dest_col = dest_rel_id % s->params->num_router_cols;
-        int dest_row = dest_rel_id / s->params->num_router_cols;
-
-        //row first, column second
-        /*int choice1 = src_row *  s->params->num_router_cols + dest_col;
-        int choice2 = dest_row * s->params->num_router_cols + src_col;
-        intersection.push_back(offset + choice1);
-        intersection.push_back(offset + choice2);*/
-        map<int, vector<Link> > &destMap = intraGroupLinks[dest_rel_id];
-        map< int, vector<Link> >::iterator it_dest = destMap.begin();
-        
-        while(it_src != curMap.end() && it_dest != destMap.end())         
-        { 
-            if(it_src->first < it_dest->first) 
-                it_src++; 
-            else if(it_dest->first < it_src->first) 
-                it_dest++; 
-            else {
-                intersection.push_back(offset + it_src->first);
-                it_src++; 
-                it_dest++; 
-            } 
-        }
-
-    }
-    else
-    {
-        /* There is a direct connection */
-        intersection.push_back(dest_router_id);
-    }
-    return intersection;
-}
-
 int find_chan(int router_id, int dest_grp_id, int num_routers)
 {
     int my_grp_id = router_id / num_routers;
@@ -3382,100 +3472,9 @@ static tw_lpid get_next_stop(router_state * s,
               int get_direct_con,
               short* rng_counter)
 {
-    int dest_lp;
-    tw_lpid router_dest_id;
-    int dest_group_id;
 
-    int local_router_id = s->router_id;
-    int my_grp_id = s->router_id / s->params->num_routers;
-    dest_group_id = dest_router_id / s->params->num_routers;
-    int origin_grp_id = msg->origin_router_id / s->params->num_routers;
-
-    int select_chan = -1;
-    /* If the packet has arrived at the destination router */
-    if(dest_router_id == local_router_id)
-    {
-        dest_lp = msg->dest_terminal_id;
-        return dest_lp;
-    }
-    /* If the packet has arrived at the destination group */
-    if(s->group_id == dest_group_id)
-    {
-        vector<int> next_stop = get_intra_router(s, local_router_id, dest_router_id, s->params->num_routers);
-        assert(!next_stop.empty());
-        assert(next_stop.size() == 1);
-        (*rng_counter)++;
-        select_chan = tw_rand_integer(lp->rng, 0, next_stop.size() - 1);
-
-        codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, next_stop[select_chan] / num_routers_per_mgrp,
-            next_stop[select_chan] % num_routers_per_mgrp, &router_dest_id);
-    
-        if(msg->packet_ID == LLU(TRACK_PKT) && msg->src_terminal_id == T_ID)
-                printf("\n Next stop is %ld ", next_stop[select_chan]);
-        
-        return router_dest_id;
-    }
-
-    /* If the packet is at the source router then select a global channel among
-        * the many global channels available (unless one already specified by
-        * adaptive routing). do_chan_selection is turned on in case prog-adaptive
-        * routing has just decided to take a non-minimal route. */
-    if(msg->last_hop == TERMINAL 
-            || s->router_id == msg->intm_rtr_id
-            || (routing == PROG_ADAPTIVE && do_chan_selection))
-    {
-        if(adap_chan >= 0)
-            select_chan = adap_chan;
-        else
-        {
-            /* Only for non-minimal routes, direct connections are preferred
-            * (global ports) */
-            if(get_direct_con)
-            {
-                if(interGroupLinks[s->router_id][dest_group_id].size() > 1)
-                select_chan = find_chan(s->router_id, dest_group_id, s->params->num_routers); 
-                assert(select_chan >= 0);
-            }
-            else
-            {
-                (*rng_counter)++;
-                select_chan = tw_rand_integer(lp->rng, 0, connectionList[my_grp_id][dest_group_id].size() - 1);
-            }
-        }
-        dest_lp = connectionList[my_grp_id][dest_group_id][select_chan];
-        //printf("\n my grp %d dest router %d dest_lp %d rid %d chunk id %d", my_grp_id, dest_router_id, dest_lp, s->router_id, msg->chunk_id);
-        msg->saved_src_dest = dest_lp;
-    }
-    /* Get the number of global channels connecting the origin and destination
-    * groups */
-    //assert(msg->saved_src_chan >= 0 && msg->saved_src_chan < connectionList[my_grp_id][dest_group_id].size());
-
-    if(s->router_id == msg->saved_src_dest)
-    {
-        (*rng_counter)++;
-        select_chan = tw_rand_integer(lp->rng, 0, interGroupLinks[s->router_id][dest_group_id].size() - 1);
-        bLink bl = interGroupLinks[s->router_id][dest_group_id][select_chan];
-        dest_lp = bl.dest;
-    }
-    else
-    {
-        /* Connection within the group */
-        bf->c21 = 1;
-        vector<int> dests = get_intra_router(s, local_router_id, msg->saved_src_dest, s->params->num_routers);
-        assert(!dests.empty());
-        (*rng_counter)++;
-        select_chan = tw_rand_integer(lp->rng, 0, dests.size() - 1);
-        
-        /* If there is a direct connection */
-        dest_lp = dests[select_chan];
-    }
-    if(msg->packet_ID == LLU(TRACK_PKT) && msg->src_terminal_id == T_ID)
-        printf("\n Next stop is %ld ", dest_lp);
-    codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, dest_lp / num_routers_per_mgrp,
-        dest_lp % num_routers_per_mgrp, &router_dest_id);
-    
-   return router_dest_id;
 }
+
 /* gets the output port corresponding to the next stop of the message */
 static int 
 get_output_port( router_state * s, 
@@ -3485,471 +3484,186 @@ get_output_port( router_state * s,
 		int next_stop, 
         short* rng_counter)
 {
-    int output_port = -1;
-    int rand_offset = -1;
-    int terminal_id = codes_mapping_get_lp_relative_id(msg->dest_terminal_id, 0, 0);
-    const dragonfly_param *p = s->params;
-        
-    int local_router_id = codes_mapping_get_lp_relative_id(next_stop, 0, 0);
-    int src_router = s->router_id;
-    int dest_router = local_router_id;
 
-    if((tw_lpid)next_stop == msg->dest_terminal_id)
-    {
-        /* Make a random number selection (only for reverse computation) */
-        (*rng_counter)++;
-        int rand_sel = tw_rand_integer(lp->rng, 0, terminal_id);
-        output_port = p->intra_grp_radix + p->num_global_channels + ( terminal_id % p->num_cn);
-    }
-    else
-    {
-        int intm_grp_id = local_router_id / p->num_routers;
-        int rand_offset = -1;
-
-        if(intm_grp_id != s->group_id)
-        {
-            /* traversing a global channel */
-            vector<bLink> &curVec = interGroupLinks[src_router][intm_grp_id];
-
-            if(interGroupLinks[src_router][intm_grp_id].size() == 0)
-                printf("\n Source router %d intm_grp_id %d ", src_router, intm_grp_id);
-
-            assert(interGroupLinks[src_router][intm_grp_id].size() > 0);
-
-            (*rng_counter)++;
-            rand_offset = tw_rand_integer(lp->rng, 0, interGroupLinks[src_router][intm_grp_id].size()-1);
-
-            assert(rand_offset >= 0 && rand_offset < s->params->num_global_channels);
-
-            bLink bl = interGroupLinks[src_router][intm_grp_id][rand_offset];
-            int channel_id = bl.offset;
-
-            output_port = p->intra_grp_radix + channel_id;
-        }
-        else
-        {
-            int intra_rtr_id = (local_router_id % p->num_routers);
-            int intragrp_rtr_id = s->router_id % p->num_routers;
-
-            int src_col = intragrp_rtr_id % p->num_router_cols;
-            int src_row = intragrp_rtr_id / p->num_router_cols;
-
-            int dest_col = intra_rtr_id % p->num_router_cols;
-            int dest_row = intra_rtr_id / p->num_router_cols;
-
-            if(src_row == dest_row)
-            {
-                (*rng_counter)++;
-                int offset = tw_rand_integer(lp->rng, 0, p->num_row_chans -1);
-                output_port = dest_col * p->num_row_chans + offset;   
-                assert(output_port < (s->params->num_router_cols * p->num_row_chans));
-            }
-            else if(src_col == dest_col)
-            {
-                assert(0);
-                (*rng_counter)++;
-                int offset = tw_rand_integer(lp->rng, 0, p->num_col_chans -1);
-                output_port = (p->num_router_cols * p->num_row_chans) + dest_row * p->num_col_chans + offset;
-                assert(output_port < p->intra_grp_radix);
-            }
-            else
-            {
-                tw_error(TW_LOC, "\n Invalid dragonfly connectivity src row %d dest row %d src col %d dest col %d src %d dest %d",
-                        src_row, dest_row, src_col, dest_col, intragrp_rtr_id, intra_rtr_id);
-            }
-        }
-    }
-    return output_port;
 }
 
-static void do_local_adaptive_routing(router_state * s,
-        tw_lp * lp,
-        terminal_dally_message * msg,
-        tw_bf * bf,
-        int dest_router_id,
-        int intm_router_id,
-        short* rng_counter)
+static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, Connection conn, conn_minimality_t c_minimality)
 {
-    tw_lpid min_rtr_id, nonmin_rtr_id; 
-    int min_port, nonmin_port;
+    int score = 0;
+    int port = conn.port;
 
-    int dest_grp_id = dest_router_id / s->params->num_routers;
-    int intm_grp_id = intm_router_id / s->params->num_routers;
-    int my_grp_id = s->router_id / s->params->num_routers;
-
-    if(my_grp_id != dest_grp_id || my_grp_id != intm_grp_id)
-        tw_error(TW_LOC, "\n Invalid local routing my grp id %d dest_gid %d intm_gid %d intm rid %d",
-                my_grp_id, dest_grp_id, intm_grp_id, intm_router_id);
-
-    int min_chan=-1, nonmin_chan=-1;
-    vector<int> next_min_stops = get_intra_router(s, s->router_id, dest_router_id, s->params->num_routers);
-    vector<int> next_nonmin_stops = get_intra_router(s, s->router_id, intm_router_id, s->params->num_routers);
-
-    (*rng_counter)++;
-    min_chan = tw_rand_integer(lp->rng, 0, next_min_stops.size() - 1);
-    (*rng_counter)++;
-    nonmin_chan = tw_rand_integer(lp->rng, 0, next_nonmin_stops.size() - 1);
-  
-    codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, next_min_stops[min_chan] / num_routers_per_mgrp,
-          next_min_stops[min_chan] % num_routers_per_mgrp, &min_rtr_id);
-    codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, next_nonmin_stops[nonmin_chan] / num_routers_per_mgrp,
-          next_nonmin_stops[nonmin_chan] % num_routers_per_mgrp, &nonmin_rtr_id);
-
-    min_port = get_output_port(s, msg, lp, bf, min_rtr_id, rng_counter);
-    nonmin_port = get_output_port(s, msg, lp, bf, nonmin_rtr_id, rng_counter);
-
-    int min_port_count = 0, nonmin_port_count = 0;
-
-    for(int k = 0; k < s->params->num_vcs; k++)
-        min_port_count += s->vc_occupancy[min_port][k];
-    min_port_count += s->queued_count[min_port];
-
-    for(int k = 0; k < s->params->num_vcs; k++)
-        nonmin_port_count += s->vc_occupancy[nonmin_port][k];
-    nonmin_port_count += s->queued_count[nonmin_port];
-
-    int local_stop = -1;
-    tw_lpid global_stop;
-
-    if(BIAS_MIN == 1)
-    {
-        nonmin_port_count = nonmin_port_count * 2;
+    if (port == -1) {
+        return INT_MAX;
     }
 
-    msg->path_type = MINIMAL;
-
-//  if(nonmin_port_count * num_intra_nonmin_hops > min_port_count * num_intra_min_hops)
-    if(min_port_count > adaptive_threshold && min_port_count > nonmin_port_count)
-    {
-        msg->path_type = NON_MINIMAL;
-    }
-}
-
-/* This function gets a randomly selected router from a group with which the
- * current router has direct connections... */
-static vector<int> get_indirect_conns(router_state * s, tw_lp * lp, int dest_grp_id, short* rng_counter)
-{
-    map< int, vector<bLink> >  &curMap = interGroupLinks[s->router_id];
-    map< int, vector<bLink> >::iterator it = curMap.begin();
-    vector<int> nonmin_ports; 
-    int num_routers = s->params->num_routers;
-    (*rng_counter)++;
-    int dest_idx = tw_rand_integer(lp->rng, 0, num_routers - 1);
-    
-    for(; it != curMap.end(); it++) {
-        if(it->first != dest_grp_id)
-        {
-            int grp_id = it->first;
-            int begin = grp_id * s->params->num_routers;
-            for(int l = 0; l < it->second.size(); l++)
+    switch (scoring) {
+        case ALPHA: //considers vc occupancy and queued count only
+            for(int k=0; k < s->params->num_vcs; k++)
             {
-                nonmin_ports.push_back(begin + dest_idx);
+                score += s->vc_occupancy[port][k];
             }
-        }
-     }
-     return nonmin_ports;
-}
-
-static int get_port_score(router_state * s,
-        int port,
-        int biase)
-{
-    int port_count = 0;
-
-    if(port <= 0)
-       return INT_MAX;
-    
-    for(int k = 0; k < s->params->num_vcs; k++)
-    {
-        port_count += s->vc_occupancy[port][k];
-    }
-    port_count += s->queued_count[port];
-
-    if(biase)
-        port_count = port_count * 2;
-    return port_count;
-}
-
-static int do_global_adaptive_routing( router_state * s,
-                 tw_lp * lp,
-				 terminal_dally_message * msg,
-                 tw_bf * bf,
-				 int dest_router_id,
-                 int intm_id_a,
-                 int intm_id_b,
-                 short* rng_counter) 
-{
-    int next_chan = -1;
-    // decide which routing to take
-    // get the queue occupancy of both the minimal and non-minimal output ports 
-
-    bool local_min = false;
-    int num_routers = s->params->num_routers;
-    int dest_grp_id = dest_router_id / num_routers;
-    int intm_grp_id_a = intm_id_a / num_routers;
-    int intm_grp_id_b = intm_id_b / num_routers;
-    
-    assert(intm_grp_id_a >= 0 && intm_grp_id_b >=0);
-
-    int my_grp_id = s->router_id / num_routers;
-
-    int num_min_chans;
-    vector<int> direct_intra;
-    if(my_grp_id == dest_grp_id)
-    {
-        local_min = true;
-        direct_intra = get_intra_router(s, s->router_id, dest_router_id, num_routers); 
-        num_min_chans = direct_intra.size();
-    }
-    else
-    {
-        num_min_chans = connectionList[my_grp_id][dest_grp_id].size();
-    }
-    int num_nonmin_chans_a = connectionList[my_grp_id][intm_grp_id_a].size();
-    int num_nonmin_chans_b = connectionList[my_grp_id][intm_grp_id_b].size();
-    int min_chan_a = -1, min_chan_b = -1, nonmin_chan_a = -1, nonmin_chan_b = -1;
-    int min_rtr_a, min_rtr_b, nonmin_rtr_a, nonmin_rtr_b;
-    vector<int> dest_rtr_as, dest_rtr_bs;
-    int min_port_a, min_port_b, nonmin_port_a, nonmin_port_b;
-    tw_lpid min_rtr_a_id, min_rtr_b_id, nonmin_rtr_a_id, nonmin_rtr_b_id;
-    bool noIntraA, noIntraB;
-
-    /* two possible routes to minimal destination */
-    (*rng_counter) += 2;
-    min_chan_a = tw_rand_integer(lp->rng, 0, num_min_chans - 1);
-    min_chan_b = tw_rand_integer(lp->rng, 0, num_min_chans - 1);
-
-    if(min_chan_a == min_chan_b && num_min_chans > 1)
-        min_chan_b = (min_chan_a + 1) % num_min_chans;
-
-    int chana1 = 0;
-
-    assert(min_chan_a >= 0);
-    if(!local_min)
-    {
-        min_rtr_a = connectionList[my_grp_id][dest_grp_id][min_chan_a];
-        noIntraA = false;
-        if(min_rtr_a == s->router_id) {
-            noIntraA = true;
-            min_rtr_a = interGroupLinks[s->router_id][dest_grp_id][chana1].dest;
-        }
-        if(num_min_chans > 1) {
-            assert(min_chan_b >= 0);
-            noIntraB = false;
-            min_rtr_b = connectionList[my_grp_id][dest_grp_id][min_chan_b];
-        
-            if(min_rtr_b == s->router_id) {
-                noIntraB = true;
-                min_rtr_b = interGroupLinks[s->router_id][dest_grp_id][chana1].dest;
+            score += s->queued_count[port];
+            break;
+        case BETA: //considers vc occupancy and queued count multiplied by the number of minimal hops to destination from the potential next stop
+            tw_error(TW_LOC, "Beta scoring not implemented");
+            break;
+        case GAMMA: //delta scoring but higher is better
+            tw_error(TW_LOC, "Gamma scoring not implemented");
+            break;
+        case DELTA: //alpha but biased 2:1 toward minimal
+            for(int k=0; k < s->params->num_vcs; k++)
+            {
+                score += s->vc_occupancy[port][k];
             }
+            score += s->queued_count[port];
+
+            if (c_minimality != C_MIN)
+                score = score * 2;
+            break;
+        default:
+            tw_error(TW_LOC, "Unsupported Scoring Protocol Error\n");
+    }
+    return score;
+}
+static Connection get_absolute_best_connection_from_conns(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, vector< Connection > conns)
+{
+    if (conns.size() == 0) { //passed no connections to this but we got to return something - return negative filled conn to force a break if not caught
+        Connection bad_conn;
+        bad_conn.src_gid = -1;
+        bad_conn.port = -1;
+        return bad_conn;
+    }
+    if (conns.size() == 1) { //no need to compare singular connection
+        return conns[0];
+    }
+
+    int num_to_compare = conns.size();
+    int scores[num_to_compare];
+    int best_score_index = 0;
+
+    int best_score = INT_MAX;
+    for(int i = 0; i < num_to_compare; i++)
+    {
+        scores[i] = dfdally_score_connection(s, bf, msg, lp, conns[i], C_MIN);
+
+        if (scores[i] < best_score) {
+            best_score = scores[i];
+            best_score_index = i;
         }
-    
-        if(noIntraA) {
-            dest_rtr_as.push_back(min_rtr_a);
-        } else {
-            dest_rtr_as = get_intra_router(s, s->router_id, min_rtr_a, s->params->num_routers);
-        }
-    }
-    else
-    {
-        noIntraA = true;
-        noIntraB = true;
-
-        assert(direct_intra.size() > 0);
-        min_rtr_a = direct_intra[min_chan_a]; 
-        dest_rtr_as.push_back(min_rtr_a);
-
-        if(num_min_chans > 1)
-            min_rtr_b = direct_intra[min_chan_b];
-    }
-    int dest_rtr_b_sel;
-    (*rng_counter)++;
-    int dest_rtr_a_sel = tw_rand_integer(lp->rng, 0, dest_rtr_as.size() - 1);
-
-    codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, dest_rtr_as[dest_rtr_a_sel] / num_routers_per_mgrp,
-            dest_rtr_as[dest_rtr_a_sel] % num_routers_per_mgrp, &min_rtr_a_id); 
-
-    min_port_a = get_output_port(s, msg, lp, bf, min_rtr_a_id, rng_counter);
-
-    if(num_min_chans > 1)
-    {
-        if(noIntraB) {
-            dest_rtr_bs.push_back(min_rtr_b);
-        } 
-        else {
-            dest_rtr_bs = get_intra_router(s, s->router_id, min_rtr_b, s->params->num_routers);
-        }
-
-        (*rng_counter)++;
-        dest_rtr_b_sel = tw_rand_integer(lp->rng, 0, dest_rtr_bs.size() - 1);
-        codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, dest_rtr_bs[dest_rtr_b_sel] / num_routers_per_mgrp,
-            dest_rtr_bs[dest_rtr_b_sel] % num_routers_per_mgrp, &min_rtr_b_id); 
-        min_port_b = get_output_port(s, msg, lp, bf, min_rtr_b_id, rng_counter);
     }
 
-    /* if a direct global channel exists for non-minimal route in the source group then give a priority to that. */
-    if(msg->my_l_hop == max_lvc_src_g)
-    {
-        assert(routing == PROG_ADAPTIVE);
-        nonmin_chan_a = find_chan(s->router_id, intm_grp_id_a, num_routers);
-        nonmin_chan_b = find_chan(s->router_id, intm_grp_id_b, num_routers);
-        assert(nonmin_chan_a >= 0 && nonmin_chan_b >= 0);
-    }
-    /* two possible nonminimal routes */
-    (*rng_counter) += 2;
-    int rand_a = tw_rand_integer(lp->rng, 0, num_nonmin_chans_a - 1);
-    int rand_b = tw_rand_integer(lp->rng, 0, num_nonmin_chans_b - 1);
-
-    noIntraA = false;
-    if(nonmin_chan_a != -1) {
-        /* TODO: For a 2-D dragonfly, this can be more than one link. */
-        bf->c25=1;
-        noIntraA = true;
-        nonmin_rtr_a = interGroupLinks[s->router_id][intm_grp_id_a][0].dest;
-    }
-    else
-    {
-        assert(rand_a >= 0);
-        nonmin_chan_a = rand_a;
-        nonmin_rtr_a = connectionList[my_grp_id][intm_grp_id_a][rand_a];
-        if(nonmin_rtr_a == s->router_id)
-            noIntraA = true;
-    }
-    assert(nonmin_chan_a >= 0);
-  
-    if(num_nonmin_chans_b > 0) {
-        noIntraB = false;
-        if(nonmin_chan_b != -1) {
-            bf->c26=1;
-            noIntraB = true;
-            nonmin_rtr_b = interGroupLinks[s->router_id][intm_grp_id_b][0].dest;
-        }
-        else
-        {
-            assert(rand_b >= 0);
-            nonmin_chan_b = rand_b;
-            nonmin_rtr_b = connectionList[my_grp_id][intm_grp_id_b][rand_b];
-            if(nonmin_rtr_b == s->router_id)
-                noIntraB = true;
-        }
-        assert(nonmin_chan_b >= 0);
-    }
-
-    if(noIntraA) {
-        dest_rtr_as.clear();
-        dest_rtr_as.push_back(nonmin_rtr_a);
-    } 
-    else {
-        dest_rtr_as = get_intra_router(s, s->router_id, nonmin_rtr_a, s->params->num_routers);  
-    }
-    (*rng_counter)++;
-    dest_rtr_a_sel = tw_rand_integer(lp->rng, 0, dest_rtr_as.size() - 1);
-  
-    codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, dest_rtr_as[dest_rtr_a_sel] / num_routers_per_mgrp,
-            dest_rtr_as[dest_rtr_a_sel] % num_routers_per_mgrp, &nonmin_rtr_a_id); 
-    nonmin_port_a = get_output_port(s, msg, lp, bf, nonmin_rtr_a_id, rng_counter); 
-
-    assert(nonmin_port_a >= 0);
-
-    if(num_nonmin_chans_b > 0)
-    {
-        bf->c11 = 1;
-        if(noIntraB) {
-            dest_rtr_bs.clear();
-            dest_rtr_bs.push_back(nonmin_rtr_b);
-        } 
-        else {
-            dest_rtr_bs = get_intra_router(s, s->router_id, nonmin_rtr_b, s->params->num_routers);  
-        }
-
-        (*rng_counter)++;
-        dest_rtr_b_sel = tw_rand_integer(lp->rng, 0, dest_rtr_bs.size() - 1);
-        codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, dest_rtr_bs[dest_rtr_b_sel] / num_routers_per_mgrp,
-            dest_rtr_bs[dest_rtr_b_sel] % num_routers_per_mgrp, &nonmin_rtr_b_id); 
-        nonmin_port_b = get_output_port(s, msg, lp, bf, nonmin_rtr_b_id, rng_counter);
-        assert(nonmin_port_b >= 0);
-    }
-
-    int min_port_a_count = 0, min_port_b_count = 0;
-    int nonmin_port_a_count = 0, nonmin_port_b_count = 0;
-
-    min_port_a_count = get_port_score(s, min_port_a, 0);
-    
-    if(num_min_chans > 1)
-    {
-        min_port_b_count = get_port_score(s, min_port_b, 0);
-    }
-    
-    nonmin_port_a_count = get_port_score(s, nonmin_port_a, BIAS_MIN);
-
-    if(num_nonmin_chans_b > 0)
-    {
-        assert(nonmin_port_b >= 0);
-        nonmin_port_b_count += get_port_score(s, nonmin_port_b, BIAS_MIN);
-    }
-    int next_min_stop = -1, next_nonmin_stop = -1;
-    int next_min_count = -1, next_nonmin_count = -1;
-
-    /* First compare which of the nonminimal ports has less congestions */
-    int sel_nonmin = 0;
-    if(num_nonmin_chans_b > 0 && nonmin_port_a_count > nonmin_port_b_count)
-    {
-        next_nonmin_count = nonmin_port_b_count;
-        next_nonmin_stop = nonmin_chan_b;
-        sel_nonmin = 1;
-    }
-    else
-    {
-        next_nonmin_count = nonmin_port_a_count;
-        next_nonmin_stop = nonmin_chan_a;
-    }
-    /* do the same for minimal ports */
-    if(num_min_chans > 1 && min_port_a_count > min_port_b_count)
-    {
-        next_min_count = min_port_b_count;
-        next_min_stop = min_chan_b;
-    }
-    else
-    {
-        next_min_count = min_port_a_count;
-        next_min_stop = min_chan_a;
-    }
-
-    /* Now compare the least congested minimal and non-minimal routes */
-    if(next_min_count > adaptive_threshold && next_min_count > next_nonmin_count)
-    {
-    //      printf("\n Minimal chan %d occupancy %d non-min %d occupancy %d ", next_min_stop, next_min_count, next_nonmin_stop, next_nonmin_count);
-        next_chan = next_nonmin_stop;
-        msg->path_type = NON_MINIMAL;
-
-        if(sel_nonmin)
-            msg->intm_rtr_id = intm_id_b;
-        else
-            msg->intm_rtr_id = intm_id_a;
-    }
-    else
-    {
-        next_chan = next_min_stop;
-        msg->path_type = MINIMAL;
-    }
-    return next_chan;
-
-  // VARIATION 1:
-  // if(num_min_hops * min_port_count <= num_nonmin_hops * nonmin_port_count) {
-  // VARIATION 2:
-  //if(num_min_hops * min_port_count <= (num_nonmin_hops * (q_avg + 1))) {
-    /*if(min_port_count <= nonmin_port_count) {
-    msg->path_type = MINIMAL;
-    next_stop = minimal_next_stop;
-    msg->intm_group_id = -1;
-  }
-  else
-  {
-    msg->path_type = NON_MINIMAL;
-    next_stop = nonmin_next_stop;
-  }*/
+    return conns[best_score_index];
 }
 
+//when using this function, you should assume that the self router is NOT the destination. That should be handled elsewhere.
+static vector< Connection > get_legal_minimal_stops(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
+{
+    int my_router_id = s->router_id;
+    int my_group_id = s->router_id / s->params->num_routers;
+    int origin_group_id = msg->origin_router_id / s->params->num_routers;
+    int fdest_group_id = fdest_router_id / s->params->num_routers;
+
+    if (my_group_id != fdest_group_id) { //we're in origin group or intermediate group - either way we need to route to fdest group minimally
+        vector< Connection > conns_to_dest_group = s->connMan->get_connections_to_group(fdest_group_id);
+        if (conns_to_dest_group.size() > 0) { //then we have a direct connection to dest group
+            return conns_to_dest_group; // --------- return direct connection
+        }
+        else { //we don't have a direct connection to group and need list of routers in our group that do
+            vector< Connection > poss_next_conns_to_group;
+            set< int > poss_router_id_set_to_group;
+            for(int i = 0; i < connectionList[my_group_id][fdest_group_id].size(); i++)
+            {
+                int poss_router_id = connectionList[my_group_id][fdest_group_id][i];
+                if (poss_router_id_set_to_group.count(poss_router_id) == 0) { //we only want to consider a single router id once (we look at all connections to it using the conn man)
+                    vector< Connection > conns = s->connMan->get_connections_to_gid(poss_router_id, CONN_LOCAL);
+                    poss_router_id_set_to_group.insert(poss_router_id);
+                    poss_next_conns_to_group.insert(poss_next_conns_to_group.end(), conns.begin(), conns.end());
+                }
+            }
+            return poss_next_conns_to_group; // --------- return non-direct connection (still minimal though)
+        }
+    }
+    else { //then we're in the final destination group, also we assume that we're not the fdest router
+        assert(my_group_id == fdest_group_id);
+        assert(my_router_id != fdest_router_id); //this should be handled outside of this function
+
+        vector< Connection > conns_to_fdest_router = s->connMan->get_connections_to_gid(fdest_router_id, CONN_LOCAL);
+        return conns_to_fdest_router;
+    }
+}
+
+static Connection dfdally_minimal_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
+{
+    vector< Connection > poss_next_stops = get_legal_minimal_stops(s, bf, msg, lp, fdest_router_id);
+    if (poss_next_stops.size() < 1)
+        tw_error(TW_LOC, "MINIMAL DEAD END\n");
+
+    ConnectionType conn_type = poss_next_stops[0].conn_type; //TODO this assumes that all possible next stops are of same type - OK for now, but remember this
+    if (conn_type == CONN_GLOBAL) { //TOOD should we really only randomize global and not local? should we really do light adaptive for nonglobal?
+        msg->num_rngs++;
+        int rand_sel = tw_rand_integer(lp->rng, 0, poss_next_stops.size() - 1);
+        return poss_next_stops[rand_sel];
+    }
+    else
+    {
+        Connection best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_next_stops);
+        return best_min_conn;
+    }
+}
+
+static Connection dfdally_nonminimal_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
+{
+
+}
+
+static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
+{
+
+}
+
+static Connection do_dfdally_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
+{
+    int my_router_id = s->router_id;
+    int my_group_id = s->router_id / s->params->num_routers;
+    int fdest_group_id = fdest_router_id / s->params->num_routers;
+    int origin_group_id = msg->origin_router_id / s->params->num_routers;
+    
+    if (my_router_id == fdest_router_id) {//destination router reached, next dest = final terminal destination
+        vector< Connection > poss_next_stops = s->connMan->get_connections_to_gid(msg->dfdally_dest_terminal_id, CONN_TERMINAL);
+        if (poss_next_stops.size() < 1)
+            tw_error(TW_LOC, "Destination Router %d: No connection to destination terminal %d\n", s->router_id, msg->dfdally_dest_terminal_id);
+            Connection best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_next_stops);
+            return best_min_conn;
+    }
+
+    Connection next_stop_conn;
+
+    switch (routing)
+    {
+        case MINIMAL:
+            next_stop_conn = dfdally_minimal_routing(s, bf, msg, lp, fdest_router_id);
+            break;
+        case NON_MINIMAL:
+            next_stop_conn = dfdally_nonminimal_routing(s, bf, msg, lp, fdest_router_id);
+            break;
+        case ADAPTIVE:
+            tw_error(TW_LOC, "Standard Adaptive Routing not implemented - try Progressive Adaptive instead");
+            break;
+        case PROG_ADAPTIVE:
+            next_stop_conn = dfdally_prog_adaptive_routing(s, bf, msg, lp, fdest_router_id);
+            break;
+        default:
+            tw_error(TW_LOC, "Error: No valid routing algorithm specified");
+            break;
+    }
+
+    return next_stop_conn;
+}
+
+static Connection do_dfdally_routing_rc(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp)
+{
+
+}
 
 static void router_verify_valid_receipt(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp)
 {
@@ -3977,29 +3691,7 @@ static void router_verify_valid_receipt(router_state *s, tw_bf *bf, terminal_dal
         }
     
     }
-    else if (msg->last_hop == LOCAL) {
-        int rel_id;
-
-        try {
-            rel_id = codes_mapping_get_lp_relative_id(msg->intm_lp_id,0,0);
-        }
-        catch (...) {
-            tw_error(TW_LOC, "\nRouter Receipt Verify: Codes Mapping Get LP Rel ID Failure - Local");
-        }
-
-        int my_loc_id = s->router_id % s->params->num_routers;
-        int intm_loc_id = rel_id % s->params->num_routers;
-
-        if (intraGroupLinks[my_loc_id][intm_loc_id].size() > 0)
-            has_valid_connection = true;
-        else
-            has_valid_connection = false;
-        
-        if (!has_valid_connection) {
-            tw_error(TW_LOC, "\nRouter received packet from non-existent connection - Local\n");
-        }
-    }
-    else if (msg->last_hop == GLOBAL) {
+    else if (msg->last_hop == GLOBAL || msg->last_hop == LOCAL) {
         int rel_id;
 
         try {
@@ -4008,16 +3700,10 @@ static void router_verify_valid_receipt(router_state *s, tw_bf *bf, terminal_dal
         catch (...) {
             tw_error(TW_LOC, "\nRouter Receipt Verify: Codes Mapping Get LP Rel ID Failure - Global");
         }
-
-        int rel_id_grp_id = rel_id / s->params->num_routers;
-
-        if (interGroupLinks[s->router_id][rel_id_grp_id].size() > 0)
-            has_valid_connection = true;
-        else
-            has_valid_connection = false;
+        has_valid_connection = s->connMan->is_connected_to_by_type(rel_id, CONN_GLOBAL);
         
         if (!has_valid_connection) {
-            tw_error(TW_LOC, "\nRouter received packet from non-existent connection - Global\n");
+            tw_error(TW_LOC, "\nRouter received packet from non-existent connection - Router\n");
         }
     }
     else {
@@ -4123,160 +3809,42 @@ static void router_packet_receive( router_state * s,
     if(cur_chunk->msg.last_hop == TERMINAL)
         cur_chunk->msg.path_type = MINIMAL;
 
-    /* for prog-adaptive routing, record the current route of packet */
-    int get_direct_con = 0;
-    prev_path_type = cur_chunk->msg.path_type;
+    Connection next_stop_conn = do_dfdally_routing(s, bf, &(cur_chunk->msg), lp, dest_router_id);
 
-    /* Here we check for local or global adaptive routing. If destination router
-    * is in the same group then we do a local adaptive routing by selecting an
-    * intermediate router ID which is in the same group. */
-    if(src_grp_id != dest_grp_id)
-    {
-        if(cur_chunk->msg.my_l_hop == max_lvc_src_g)
-        {
-            vector<int> direct_rtrs = get_indirect_conns(s, lp, dest_grp_id, &(msg->num_rngs));
-            assert(direct_rtrs.size() > 0);
-            msg->num_rngs++;
-            int indxa = tw_rand_integer(lp->rng, 0, direct_rtrs.size() - 1); 
-            intm_router_id = direct_rtrs[indxa];
-            msg->num_rngs++;
-            int indxb = tw_rand_integer(lp->rng, 0, direct_rtrs.size() - 1); 
-            intm_router_id_b = direct_rtrs[indxb];
-            assert(intm_router_id / num_routers != local_grp_id);
-            assert(intm_router_id_b / num_routers != local_grp_id);
-        }
-        else
-        {
-            msg->num_rngs += 2;
-            intm_router_id = tw_rand_integer(lp->rng, 0, total_routers - 1);
-            intm_router_id_b = tw_rand_integer(lp->rng, 0, total_routers - 1); 
-            if((intm_router_id/num_routers) == local_grp_id)
-                    intm_router_id = (intm_router_id + num_routers) % total_routers; 
-            
-            if((intm_router_id_b/num_routers) == local_grp_id)
-            {
-                intm_router_id_b = (intm_router_id_b + num_routers) % total_routers;
-            }
-            
-            assert(intm_router_id / num_routers != local_grp_id);
-            assert(intm_router_id_b / num_routers != local_grp_id);
-        }
-    }
-    else
-    {
-        msg->num_rngs++;
-        intm_router_id = (src_grp_id * num_routers) + 
-                        (((s->router_id % num_routers) + 
-                        tw_rand_integer(lp->rng, 1, num_routers - 1)) % num_routers);
-    }
-    
-    if(routing == NON_MINIMAL)
-        cur_chunk->msg.path_type = NON_MINIMAL;
-    
-    /* progressive adaptive routing is only triggered when packet has to traverse a
-    * global channel. It doesn't make sense to use it within a group */
-    if(dest_grp_id != src_grp_id && 
-            ((cur_chunk->msg.last_hop == TERMINAL 
-                && routing == ADAPTIVE) 
-            || (cur_chunk->msg.path_type == MINIMAL 
-                && routing == PROG_ADAPTIVE 
-             // && s->router_id != dest_router_id)))
-                && local_grp_id == src_grp_id))) 
-    {
-        adap_chan = do_global_adaptive_routing(s, lp, &(cur_chunk->msg), bf, dest_router_id, intm_router_id, intm_router_id_b, &(msg->num_rngs));
-    }
-    
-    /* If destination router is in the same group then local adaptive routing is
-    * triggered */
-    if(cur_chunk->msg.origin_router_id == dest_router_id)
-        cur_chunk->msg.path_type = MINIMAL;
+    if (s->connMan->is_any_connection_to(next_stop_conn.dest_gid) == false)
+        tw_error(TW_LOC, "Router %d does not have a connection to chosen destination %d\n", s->router_id, next_stop_conn.dest_gid);
 
-    if(dest_grp_id == src_grp_id &&
-            dest_router_id != s->router_id &&
-            (routing == ADAPTIVE || routing == PROG_ADAPTIVE) 
-            && cur_chunk->msg.last_hop == TERMINAL) 
-    {
-            do_local_adaptive_routing(s, lp, &(cur_chunk->msg), bf, dest_router_id, intm_router_id, &(msg->num_rngs));
+    output_port = next_stop_conn.port;
+
+    if (next_stop_conn.conn_type != CONN_TERMINAL) {
+        int id = next_stop_conn.dest_gid;
+        tw_lpid router_dest_id;
+        codes_mapping_get_lp_id(lp_group_name, LP_CONFIG_NM_ROUT, s->anno, 0, id / num_routers_per_mgrp, id % num_routers_per_mgrp, &router_dest_id);
+        next_stop = router_dest_id;
+    }
+    else {
+        next_stop = cur_chunk->msg.dest_terminal_id;
     }
 
-    next_path_type = cur_chunk->msg.path_type;
-
-    if(cur_chunk->msg.path_type != MINIMAL && cur_chunk->msg.path_type != NON_MINIMAL)
-        tw_error(TW_LOC, "\n packet src %d dest %d intm %d src grp %d dest grp %d", s->router_id, dest_router_id, intm_router_id, src_grp_id, dest_grp_id);
-
-    assert(cur_chunk->msg.path_type == MINIMAL || cur_chunk->msg.path_type == NON_MINIMAL);
-    
-    /* If non-minimal, set the random destination */
-    if(cur_chunk->msg.last_hop == TERMINAL 
-            && cur_chunk->msg.path_type == NON_MINIMAL
-            && cur_chunk->msg.intm_rtr_id == -1)
-    {
-        cur_chunk->msg.nonmin_done = 0;
-        cur_chunk->msg.intm_rtr_id = intm_router_id;
-    }
-
-    if(cur_chunk->msg.path_type == NON_MINIMAL)
-    {
-        /* If non-minimal route has completed, mark the packet.
-        * If not, set the non-minimal destination.*/
-        if(s->router_id == cur_chunk->msg.intm_rtr_id)
-        {
-            cur_chunk->msg.nonmin_done = 1;
-        }
-        else if(cur_chunk->msg.nonmin_done == 0)
-        {
-            //printf("\n Setting intm router id to %d %d", dest_router_id, cur_chunk->msg.intm_rtr_id);
-            dest_router_id = cur_chunk->msg.intm_rtr_id;
-        }
-    }
-
-    if(cur_chunk->msg.path_type == NON_MINIMAL)
-    {
-        if((cur_chunk->msg.my_l_hop == max_lvc_src_g && cur_chunk->msg.my_g_hop == min_gvc_src_g)
-    || (cur_chunk->msg.my_l_hop == max_lvc_intm_g && cur_chunk->msg.my_g_hop == min_gvc_intm_g))
-        get_direct_con = 1;
-    }
-    
-    /* If the packet route has just changed to non-minimal with prog-adaptive
-    * routing, we have to compute the next stop based on that */
-    int do_chan_selection = 0;
-    if(routing == PROG_ADAPTIVE && prev_path_type != next_path_type && s->group_id == src_grp_id)
-        do_chan_selection = 1;
-  
-    next_stop = get_next_stop(s, lp, bf, &(cur_chunk->msg), dest_router_id, adap_chan, do_chan_selection, get_direct_con, &(msg->num_rngs));
-
-    if(cur_chunk->msg.packet_ID == LLU(TRACK_PKT) && cur_chunk->msg.src_terminal_id == T_ID)
-        printf("\n Packet %llu arrived at router %u next stop %d final stop %d local hops %d global hops %d", cur_chunk->msg.packet_ID, s->router_id, next_stop, dest_router_id, cur_chunk->msg.my_l_hop, cur_chunk->msg.my_g_hop);
-
-    output_port = get_output_port(s, &(cur_chunk->msg), lp, bf, next_stop, &(msg->num_rngs)); 
+    //From here the output port is known and output_chan is determined shortly
     assert(output_port >= 0);
-    int max_vc_size = s->params->cn_vc_size;
-
     cur_chunk->msg.vc_index = output_port;
     cur_chunk->msg.next_stop = next_stop;
 
+    //TODO double check the dfdally vc selection process
+    int max_vc_size = 0;
     output_chan = 0;
     if(output_port < s->params->intra_grp_radix) {
-        if(DF_DALLY == 1)
-        {
-            if(cur_chunk->msg.my_g_hop == 1 && cur_chunk->msg.last_hop == GLOBAL) {
-                output_chan = 1;
-            } else if(cur_chunk->msg.my_g_hop == 1 && cur_chunk->msg.last_hop == LOCAL){
-                output_chan = 2;
-            }
-            else if (cur_chunk->msg.my_g_hop == 2) {
-                output_chan = 3;
-            }
+        if(cur_chunk->msg.my_g_hop == 1 && cur_chunk->msg.last_hop == GLOBAL) {
+            output_chan = 1;
+        } 
+        else if(cur_chunk->msg.my_g_hop == 1 && cur_chunk->msg.last_hop == LOCAL) {
+            output_chan = 2;
         }
-            /* TODO: Recheck VC count after things are in order for a 2-D dragonfly. */
-        //else {
-        //  if(cur_chunk->msg.my_g_hop == 1 && cur_chunk->msg.last_hop == GLOBAL) {
-            //    output_chan = 2;
-        // }
-        // else if (cur_chunk->msg.my_g_hop == 2 && cur_chunk->msg.last_hop == GLOBAL) {
-            //   output_chan = 6;
-            //}
-        //}
+        else if (cur_chunk->msg.my_g_hop == 2) {
+            output_chan = 3;
+        }
+ 
         max_vc_size = s->params->local_vc_size;
         cur_chunk->msg.my_l_hop++;
     } 
@@ -4290,7 +3858,8 @@ static void router_packet_receive( router_state * s,
         
     assert(output_chan < vcs_per_qos);
     output_chan = output_chan + (vcg * vcs_per_qos);
-    assert(output_chan < s->params->num_vcs);
+    assert(output_chan < s->params->num_vcs && output_chan >= 0);
+
     cur_chunk->msg.output_chan = output_chan;
     cur_chunk->msg.my_N_hop++;
 
@@ -4300,6 +3869,9 @@ static void router_packet_receive( router_state * s,
     if(output_chan >= s->params->num_vcs || output_chan < 0)
         tw_error(TW_LOC, "\n Output channel %d great than available VCs %d", output_chan, s->params->num_vcs - 1);
                 //cur_chunk->msg.packet_ID, output_chan, output_port, s->router_id, dest_router_id, cur_chunk->msg.path_type, src_grp_id, dest_grp_id, msg->src_terminal_id);
+
+    if(cur_chunk->msg.packet_ID == LLU(TRACK_PKT) && cur_chunk->msg.src_terminal_id == T_ID)
+            printf("\n Packet %llu arrived at router %u next stop %d final stop %d local hops %d global hops %d", cur_chunk->msg.packet_ID, s->router_id, next_stop, dest_router_id, cur_chunk->msg.my_l_hop, cur_chunk->msg.my_g_hop);
 
     if(msg->remote_event_size_bytes > 0) {
         void *m_data_src = model_net_method_get_edata(DRAGONFLY_DALLY_ROUTER, msg);
@@ -4312,8 +3884,8 @@ static void router_packet_receive( router_state * s,
         assert(output_chan < s->params->num_vcs && output_port < s->params->radix);
         router_credit_send(s, msg, lp, -1, &(msg->num_rngs));
     
-        append_to_terminal_dally_message_list( s->pending_msgs[output_port], 
-        s->pending_msgs_tail[output_port], output_chan, cur_chunk);
+        append_to_terminal_dally_message_list(s->pending_msgs[output_port], s->pending_msgs_tail[output_port],
+                                            output_chan, cur_chunk);
         s->vc_occupancy[output_port][output_chan] += s->params->chunk_size;
         if(s->in_send_loop[output_port] == 0) {
             bf->c3 = 1;
@@ -5009,305 +4581,305 @@ struct model_net_method dragonfly_dally_router_method =
     custom_dally_dfly_router_get_model_types,
 };
 
-#ifdef ENABLE_CORTEX
+// #ifdef ENABLE_CORTEX
 
-static int dragonfly_dally_get_number_of_compute_nodes(void* topo) {
+// static int dragonfly_dally_get_number_of_compute_nodes(void* topo) {
     
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1.0;
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1.0;
 
-    return params->total_terminals;
-}
+//     return params->total_terminals;
+// }
 
-static int dragonfly_dally_get_number_of_routers(void* topo) {
-    // TODO
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1.0;
+// static int dragonfly_dally_get_number_of_routers(void* topo) {
+//     // TODO
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1.0;
 
-    return params->total_routers;
-}
+//     return params->total_routers;
+// }
 
-static double dragonfly_dally_get_router_link_bandwidth(void* topo, router_id_t r1, router_id_t r2) {
-        // TODO: handle this function for multiple cables between the routers.
-        // Right now it returns the bandwidth of a single cable only. 
-	// Given two router ids r1 and r2, this function should return the bandwidth (double)
-	// of the link between the two routers, or 0 of such a link does not exist in the topology.
-	// The function should return -1 if one of the router id is invalid.
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1.0;
+// static double dragonfly_dally_get_router_link_bandwidth(void* topo, router_id_t r1, router_id_t r2) {
+//         // TODO: handle this function for multiple cables between the routers.
+//         // Right now it returns the bandwidth of a single cable only. 
+// 	// Given two router ids r1 and r2, this function should return the bandwidth (double)
+// 	// of the link between the two routers, or 0 of such a link does not exist in the topology.
+// 	// The function should return -1 if one of the router id is invalid.
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1.0;
 
-    if(r1 > params->total_routers || r2 > params->total_routers)
-        return -1.0;
+//     if(r1 > params->total_routers || r2 > params->total_routers)
+//         return -1.0;
 
-    if(r1 < 0 || r2 < 0)
-        return -1.0;
+//     if(r1 < 0 || r2 < 0)
+//         return -1.0;
 
-    int gid_r1 = r1 / params->num_routers;
-    int gid_r2 = r2 / params->num_routers;
+//     int gid_r1 = r1 / params->num_routers;
+//     int gid_r2 = r2 / params->num_routers;
 
-    if(gid_r1 == gid_r2)
-    {
-        int lid_r1 = r1 % params->num_routers;
-        int lid_r2 = r2 % params->num_routers;
+//     if(gid_r1 == gid_r2)
+//     {
+//         int lid_r1 = r1 % params->num_routers;
+//         int lid_r2 = r2 % params->num_routers;
 
-        /* The connection will be there if the router is in the same row or
-         * same column */
-        int src_row_r1 = lid_r1 / params->num_router_cols;
-        int src_row_r2 = lid_r2 / params->num_router_cols;
+//         /* The connection will be there if the router is in the same row or
+//          * same column */
+//         int src_row_r1 = lid_r1 / params->num_router_cols;
+//         int src_row_r2 = lid_r2 / params->num_router_cols;
 
-        int src_col_r1 = lid_r1 % params->num_router_cols;
-        int src_col_r2 = lid_r2 % params->num_router_cols;
+//         int src_col_r1 = lid_r1 % params->num_router_cols;
+//         int src_col_r2 = lid_r2 % params->num_router_cols;
 
-        if(src_row_r1 == src_row_r2 || src_col_r1 == src_col_r2)
-            return params->local_bandwidth;
-        else
-            return 0.0;
-    }
-    else
-    {
-        vector<bLink> &curVec = interGroupLinks[r1][gid_r2];
-        vector<bLink>::iterator it = curVec.begin();
+//         if(src_row_r1 == src_row_r2 || src_col_r1 == src_col_r2)
+//             return params->local_bandwidth;
+//         else
+//             return 0.0;
+//     }
+//     else
+//     {
+//         vector<bLink> &curVec = interGroupLinks[r1][gid_r2];
+//         vector<bLink>::iterator it = curVec.begin();
 
-        for(; it != curVec.end(); it++)
-        {
-            bLink bl = *it;
-            if(bl.dest == r2)
-                return params->global_bandwidth;
-        }
+//         for(; it != curVec.end(); it++)
+//         {
+//             bLink bl = *it;
+//             if(bl.dest == r2)
+//                 return params->global_bandwidth;
+//         }
         
-        return 0.0;
-    }
-    return 0.0;
-}
+//         return 0.0;
+//     }
+//     return 0.0;
+// }
 
-static double dragonfly_dally_get_compute_node_bandwidth(void* topo, cn_id_t node) {
-        // TODO
-	// Given the id of a compute node, this function should return the bandwidth of the
-	// link connecting this compute node to its router.
-	// The function should return -1 if the compute node id is invalid.
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1.0;
+// static double dragonfly_dally_get_compute_node_bandwidth(void* topo, cn_id_t node) {
+//         // TODO
+// 	// Given the id of a compute node, this function should return the bandwidth of the
+// 	// link connecting this compute node to its router.
+// 	// The function should return -1 if the compute node id is invalid.
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1.0;
    
-    if(node < 0 || node >= params->total_terminals)
-        return -1.0;
+//     if(node < 0 || node >= params->total_terminals)
+//         return -1.0;
     
-    return params->cn_bandwidth;
-}
+//     return params->cn_bandwidth;
+// }
 
-static int dragonfly_dally_get_router_neighbor_count(void* topo, router_id_t r) {
-        // TODO
-	// Given the id of a router, this function should return the number of routers
-	// (not compute nodes) connected to it. It should return -1 if the router id
-	// is not valid.
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1.0;
+// static int dragonfly_dally_get_router_neighbor_count(void* topo, router_id_t r) {
+//         // TODO
+// 	// Given the id of a router, this function should return the number of routers
+// 	// (not compute nodes) connected to it. It should return -1 if the router id
+// 	// is not valid.
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1.0;
 
-    if(r < 0 || r >= params->total_routers)
-        return -1.0;
+//     if(r < 0 || r >= params->total_routers)
+//         return -1.0;
 
-    /* Now count the global channels */
-    set<router_id_t> g_neighbors;
+//     /* Now count the global channels */
+//     set<router_id_t> g_neighbors;
 
-    map< int, vector<bLink> > &curMap = interGroupLinks[r];
-    map< int, vector<bLink> >::iterator it = curMap.begin(); 
-    for(; it != curMap.end(); it++) {   
-        for(int l = 0; l < it->second.size(); l++) {
-            g_neighbors.insert(it->second[l].dest);
-        }
-    }
-    return (params->num_router_cols - 1) + (params->num_router_rows - 1) + g_neighbors.size();
-}
+//     map< int, vector<bLink> > &curMap = interGroupLinks[r];
+//     map< int, vector<bLink> >::iterator it = curMap.begin(); 
+//     for(; it != curMap.end(); it++) {   
+//         for(int l = 0; l < it->second.size(); l++) {
+//             g_neighbors.insert(it->second[l].dest);
+//         }
+//     }
+//     return (params->num_router_cols - 1) + (params->num_router_rows - 1) + g_neighbors.size();
+// }
 
-static void dragonfly_dally_get_router_neighbor_list(void* topo, router_id_t r, router_id_t* neighbors) {
-	// Given a router id r, this function fills the "neighbors" array with the ids of routers
-	// directly connected to r. It is assumed that enough memory has been allocated to "neighbors"
-	// (using get_router_neighbor_count to know the required size).
-    const dragonfly_param * params = &all_params[num_params-1];
+// static void dragonfly_dally_get_router_neighbor_list(void* topo, router_id_t r, router_id_t* neighbors) {
+// 	// Given a router id r, this function fills the "neighbors" array with the ids of routers
+// 	// directly connected to r. It is assumed that enough memory has been allocated to "neighbors"
+// 	// (using get_router_neighbor_count to know the required size).
+//     const dragonfly_param * params = &all_params[num_params-1];
 
-    int gid = r / params->num_routers;
-    int local_rid = r - (gid * params->num_routers);
-    int src_row = local_rid / params->num_router_cols;
-    int src_col = local_rid % params->num_router_cols;
+//     int gid = r / params->num_routers;
+//     int local_rid = r - (gid * params->num_routers);
+//     int src_row = local_rid / params->num_router_cols;
+//     int src_col = local_rid % params->num_router_cols;
 
-    /* First the routers in the same row */
-    int i = 0;
-    int offset = 0;
-    while(i < params->num_router_cols)
-    {
-        int neighbor = gid * params->num_routers + (src_row * params->num_router_cols) + i;
-        if(neighbor != r)
-        {
-            neighbors[offset] = neighbor;
-            offset++;
-        }
-        i++;
-    }
+//     /* First the routers in the same row */
+//     int i = 0;
+//     int offset = 0;
+//     while(i < params->num_router_cols)
+//     {
+//         int neighbor = gid * params->num_routers + (src_row * params->num_router_cols) + i;
+//         if(neighbor != r)
+//         {
+//             neighbors[offset] = neighbor;
+//             offset++;
+//         }
+//         i++;
+//     }
 
-    /* Now the routers in the same column. */
-    offset = 0;
-    i = 0;
-    while(i <  params->num_router_rows)
-    {
-        int neighbor = gid * params->num_routers + src_col + (i * params->num_router_cols);
+//     /* Now the routers in the same column. */
+//     offset = 0;
+//     i = 0;
+//     while(i <  params->num_router_rows)
+//     {
+//         int neighbor = gid * params->num_routers + src_col + (i * params->num_router_cols);
 
-        if(neighbor != r)
-        {
-            neighbors[offset+params->num_router_cols-1] = neighbor;
-            offset++;
-        }
-        i++;
-    }
-    int g_offset = params->num_router_cols + params->num_router_rows - 2;
+//         if(neighbor != r)
+//         {
+//             neighbors[offset+params->num_router_cols-1] = neighbor;
+//             offset++;
+//         }
+//         i++;
+//     }
+//     int g_offset = params->num_router_cols + params->num_router_rows - 2;
     
-    /* Now fill up global channels */
-    set<router_id_t> g_neighbors;
+//     /* Now fill up global channels */
+//     set<router_id_t> g_neighbors;
 
-    map< int, vector<bLink> > &curMap = interGroupLinks[r];
-    map< int, vector<bLink> >::iterator it = curMap.begin(); 
-    for(; it != curMap.end(); it++) {   
-        for(int l = 0; l < it->second.size(); l++) {
-            g_neighbors.insert(it->second[l].dest);
-        }
-    }
-    /* Now transfer the content of the sets to the array */
-    set<router_id_t>::iterator it_set;
-    int count = 0;
+//     map< int, vector<bLink> > &curMap = interGroupLinks[r];
+//     map< int, vector<bLink> >::iterator it = curMap.begin(); 
+//     for(; it != curMap.end(); it++) {   
+//         for(int l = 0; l < it->second.size(); l++) {
+//             g_neighbors.insert(it->second[l].dest);
+//         }
+//     }
+//     /* Now transfer the content of the sets to the array */
+//     set<router_id_t>::iterator it_set;
+//     int count = 0;
 
-    for(it_set = g_neighbors.begin(); it_set != g_neighbors.end(); it_set++)
-    {
-        neighbors[g_offset+count] = *it_set;
-        ++count;
-    }
-}
+//     for(it_set = g_neighbors.begin(); it_set != g_neighbors.end(); it_set++)
+//     {
+//         neighbors[g_offset+count] = *it_set;
+//         ++count;
+//     }
+// }
 
-static int dragonfly_dally_get_router_location(void* topo, router_id_t r, int32_t* location, int size) {
-        // TODO
-	// Given a router id r, this function should fill the "location" array (of maximum size "size")
-	// with information providing the location of the router in the topology. In a Dragonfly network,
-	// for instance, this can be the array [ group_id, router_id ] where group_id is the id of the
-	// group in which the router is, and router_id is the id of the router inside this group (as opposed
-	// to "r" which is its global id). For a torus network, this would be the dimensions.
-	// If the "size" is sufficient to hold the information, the function should return the size 
-	// effectively used (e.g. 2 in the above example). If however the function did not manage to use
-	// the provided buffer, it should return -1.
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1;
+// static int dragonfly_dally_get_router_location(void* topo, router_id_t r, int32_t* location, int size) {
+//         // TODO
+// 	// Given a router id r, this function should fill the "location" array (of maximum size "size")
+// 	// with information providing the location of the router in the topology. In a Dragonfly network,
+// 	// for instance, this can be the array [ group_id, router_id ] where group_id is the id of the
+// 	// group in which the router is, and router_id is the id of the router inside this group (as opposed
+// 	// to "r" which is its global id). For a torus network, this would be the dimensions.
+// 	// If the "size" is sufficient to hold the information, the function should return the size 
+// 	// effectively used (e.g. 2 in the above example). If however the function did not manage to use
+// 	// the provided buffer, it should return -1.
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1;
 
-    if(r < 0 || r >= params->total_terminals)
-        return -1;
+//     if(r < 0 || r >= params->total_terminals)
+//         return -1;
 
-    if(size < 2)
-        return -1;
+//     if(size < 2)
+//         return -1;
 
-    int rid = r % params->num_routers;
-    int gid = r / params->num_routers;
-    location[0] = gid;
-    location[1] = rid;
-    return 2;
-}
+//     int rid = r % params->num_routers;
+//     int gid = r / params->num_routers;
+//     location[0] = gid;
+//     location[1] = rid;
+//     return 2;
+// }
 
-static int dragonfly_dally_get_compute_node_location(void* topo, cn_id_t node, int32_t* location, int size) {
-        // TODO
-	// This function does the same as dragonfly_dally_get_router_location but for a compute node instead
-	// of a router. E.g., for a dragonfly network, the location could be expressed as the array
-	// [ group_id, router_id, terminal_id ]
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1;
+// static int dragonfly_dally_get_compute_node_location(void* topo, cn_id_t node, int32_t* location, int size) {
+//         // TODO
+// 	// This function does the same as dragonfly_dally_get_router_location but for a compute node instead
+// 	// of a router. E.g., for a dragonfly network, the location could be expressed as the array
+// 	// [ group_id, router_id, terminal_id ]
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1;
 
-    if(node < 0 || node >= params->total_terminals)
-        return -1;
+//     if(node < 0 || node >= params->total_terminals)
+//         return -1;
   
-    if(size < 3)
-        return -1;
+//     if(size < 3)
+//         return -1;
 
-    int rid = (node / params->num_cn) % params->num_routers;
-    int rid_global = node / params->num_cn;
-    int gid = rid_global / params->num_routers;
-    int lid = node % params->num_cn;
+//     int rid = (node / params->num_cn) % params->num_routers;
+//     int rid_global = node / params->num_cn;
+//     int gid = rid_global / params->num_routers;
+//     int lid = node % params->num_cn;
    
-    location[0] = gid;
-    location[1] = rid;
-    location[2] = lid;
+//     location[0] = gid;
+//     location[1] = rid;
+//     location[2] = lid;
 
-    return 3;
-}
+//     return 3;
+// }
 
-static router_id_t dragonfly_dally_get_router_from_compute_node(void* topo, cn_id_t node) {
-        // TODO
-	// Given a node id, this function returns the id of the router connected to the node,
-	// or -1 if the node id is not valid.
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1;
+// static router_id_t dragonfly_dally_get_router_from_compute_node(void* topo, cn_id_t node) {
+//         // TODO
+// 	// Given a node id, this function returns the id of the router connected to the node,
+// 	// or -1 if the node id is not valid.
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1;
 
-    if(node < 0 || node >= params->total_terminals)
-        return -1;
+//     if(node < 0 || node >= params->total_terminals)
+//         return -1;
     
-    router_id_t rid = node / params->num_cn;
-    return rid;
-}
+//     router_id_t rid = node / params->num_cn;
+//     return rid;
+// }
 
-static int dragonfly_dally_get_router_compute_node_count(void* topo, router_id_t r) {
-	// Given the id of a router, returns the number of compute nodes connected to this
-	// router, or -1 if the router id is not valid.
-    const dragonfly_param * params = &all_params[num_params-1];
-    if(!params)
-        return -1;
+// static int dragonfly_dally_get_router_compute_node_count(void* topo, router_id_t r) {
+// 	// Given the id of a router, returns the number of compute nodes connected to this
+// 	// router, or -1 if the router id is not valid.
+//     const dragonfly_param * params = &all_params[num_params-1];
+//     if(!params)
+//         return -1;
 
-    if(r < 0 || r >= params->total_routers)
-        return -1;
+//     if(r < 0 || r >= params->total_routers)
+//         return -1;
     
-    return params->num_cn;
-}
+//     return params->num_cn;
+// }
 
-static void dragonfly_dally_get_router_compute_node_list(void* topo, router_id_t r, cn_id_t* nodes) {
-        // TODO: What if there is an invalid router ID?
-	// Given the id of a router, fills the "nodes" array with the list of ids of compute nodes
-	// connected to this router. It is assumed that enough memory has been allocated for the
-	// "nodes" variable to hold all the ids.
-    const dragonfly_param * params = &all_params[num_params-1];
+// static void dragonfly_dally_get_router_compute_node_list(void* topo, router_id_t r, cn_id_t* nodes) {
+//         // TODO: What if there is an invalid router ID?
+// 	// Given the id of a router, fills the "nodes" array with the list of ids of compute nodes
+// 	// connected to this router. It is assumed that enough memory has been allocated for the
+// 	// "nodes" variable to hold all the ids.
+//     const dragonfly_param * params = &all_params[num_params-1];
 
-    for(int i = 0; i < params->num_cn; i++)
-        nodes[i] = r * params->num_cn + i;
-}
+//     for(int i = 0; i < params->num_cn; i++)
+//         nodes[i] = r * params->num_cn + i;
+// }
 
-extern "C" {
+// extern "C" {
 
-cortex_topology dragonfly_dally_cortex_topology = {
-//        .internal = 
-			NULL,
-//		  .get_number_of_routers          = 
-			dragonfly_dally_get_number_of_routers,
-//		  .get_number_of_compute_nodes	  = 
-			dragonfly_dally_get_number_of_compute_nodes,
-//        .get_router_link_bandwidth      = 
-			dragonfly_dally_get_router_link_bandwidth,
-//        .get_compute_node_bandwidth     = 
-			dragonfly_dally_get_compute_node_bandwidth,
-//        .get_router_neighbor_count      = 
-			dragonfly_dally_get_router_neighbor_count,
-//        .get_router_neighbor_list       = 
-			dragonfly_dally_get_router_neighbor_list,
-//        .get_router_location            = 
-			dragonfly_dally_get_router_location,
-//        .get_compute_node_location      = 
-			dragonfly_dally_get_compute_node_location,
-//        .get_router_from_compute_node   = 
-			dragonfly_dally_get_router_from_compute_node,
-//        .get_router_compute_node_count  = 
-			dragonfly_dally_get_router_compute_node_count,
-//        .get_router_compute_node_list   = dragonfly_dally_get_router_compute_node_list,
-            dragonfly_dally_get_router_compute_node_list
-};
+// cortex_topology dragonfly_dally_cortex_topology = {
+// //        .internal = 
+// 			NULL,
+// //		  .get_number_of_routers          = 
+// 			dragonfly_dally_get_number_of_routers,
+// //		  .get_number_of_compute_nodes	  = 
+// 			dragonfly_dally_get_number_of_compute_nodes,
+// //        .get_router_link_bandwidth      = 
+// 			dragonfly_dally_get_router_link_bandwidth,
+// //        .get_compute_node_bandwidth     = 
+// 			dragonfly_dally_get_compute_node_bandwidth,
+// //        .get_router_neighbor_count      = 
+// 			dragonfly_dally_get_router_neighbor_count,
+// //        .get_router_neighbor_list       = 
+// 			dragonfly_dally_get_router_neighbor_list,
+// //        .get_router_location            = 
+// 			dragonfly_dally_get_router_location,
+// //        .get_compute_node_location      = 
+// 			dragonfly_dally_get_compute_node_location,
+// //        .get_router_from_compute_node   = 
+// 			dragonfly_dally_get_router_from_compute_node,
+// //        .get_router_compute_node_count  = 
+// 			dragonfly_dally_get_router_compute_node_count,
+// //        .get_router_compute_node_list   = dragonfly_dally_get_router_compute_node_list,
+//             dragonfly_dally_get_router_compute_node_list
+// };
 
-}
-#endif
+// }
+// #endif
 
 }
