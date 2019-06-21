@@ -3672,10 +3672,12 @@ static void router_verify_valid_receipt(router_state *s, tw_bf *bf, terminal_dal
         printf("Router received a packet with %d hops so far! (Notify on > than %d)\n",msg->my_N_hop, s->params->max_hops_notify);
     }
 
+    tw_lpid last_sender_lpid = msg->intm_lp_id;
+    int rel_id, src_term_rel_id;
+
     bool has_valid_connection;
     if (msg->last_hop == TERMINAL) {
         tw_lpid src_term_lpgid = msg->src_terminal_id;
-        int src_term_rel_id;
 
         try {
             src_term_rel_id = codes_mapping_get_lp_relative_id(src_term_lpgid,0,0);
@@ -3691,20 +3693,27 @@ static void router_verify_valid_receipt(router_state *s, tw_bf *bf, terminal_dal
         }
     
     }
-    else if (msg->last_hop == GLOBAL || msg->last_hop == LOCAL) {
-        int rel_id;
-
+    else if (msg->last_hop == LOCAL)
+    {
         try {
-            rel_id = rel_id = codes_mapping_get_lp_relative_id(msg->intm_lp_id,0,0);
+            rel_id = codes_mapping_get_lp_relative_id(last_sender_lpid,0,0);
+        }
+        catch (...) {
+            tw_error(TW_LOC, "\nRouter Receipt Verify: Codes Mapping Get LP Rel ID Failure - Local");
+        }
+
+        int rel_loc_id = rel_id % s->params->num_routers;
+        has_valid_connection = s->connMan->is_connected_to_by_type(rel_loc_id, CONN_LOCAL);
+    }
+    else if (msg->last_hop == GLOBAL)
+    {
+        try {
+            rel_id = codes_mapping_get_lp_relative_id(last_sender_lpid,0,0);
         }
         catch (...) {
             tw_error(TW_LOC, "\nRouter Receipt Verify: Codes Mapping Get LP Rel ID Failure - Global");
         }
         has_valid_connection = s->connMan->is_connected_to_by_type(rel_id, CONN_GLOBAL);
-        
-        if (!has_valid_connection) {
-            tw_error(TW_LOC, "\nRouter received packet from non-existent connection - Router\n");
-        }
     }
     else {
         tw_error(TW_LOC, "\nUnspecified msg->last_hop when received by a router\n");
