@@ -948,33 +948,11 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
     if(rc) {
         tw_error(TW_LOC, "\nnum_groups not specified, Aborting\n");
     }
-    rc = configuration_get_value_int(&config, "PARAMS", "num_col_chans", anno, &p->num_col_chans);
+    
+    rc = configuration_get_value_int(&config, "PARAMS", "num_routers", anno, &p->num_routers);
     if(rc) {
-//        printf("\n Number of links connecting chassis not specified, setting to default value 3 ");
-        p->num_col_chans = 3;
+        tw_error(TW_LOC, "\nnum_routers not specified, Aborting\n");
     }
-    rc = configuration_get_value_int(&config, "PARAMS", "num_row_chans", anno, &p->num_row_chans);
-    if(rc) {
-//        printf("\n Number of links connecting chassis not specified, setting to default value 3 ");
-        p->num_row_chans = 1;
-    }
-    rc = configuration_get_value_int(&config, "PARAMS", "num_router_rows", anno, &p->num_router_rows);
-    if(rc) {
-        if(!myRank)
-            fprintf(stderr, "Number of router rows not specified, setting to 6\n");
-        p->num_router_rows = 6;
-    }
-    rc = configuration_get_value_int(&config, "PARAMS", "num_router_cols", anno, &p->num_router_cols);
-    if(rc) {
-        if(!myRank)
-            fprintf(stderr,"Number of router columns not specified, setting to 16\n");
-        p->num_router_cols = 16;
-    }
-    p->intra_grp_radix = (p->num_router_cols * p->num_row_chans);
-    if(p->num_router_rows > 1)
-        p->intra_grp_radix += (p->num_router_rows * p->num_col_chans);
-
-    p->num_routers = p->num_router_rows * p->num_router_cols;
     
     rc = configuration_get_value_int(&config, "PARAMS", "num_cns_per_router", anno, &p->num_cn);
     if(rc) {
@@ -989,6 +967,7 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
             fprintf(stderr,"Number of global channels per router not specified, setting to 10\n");
         p->num_global_channels = 10;
     }
+    p->intra_grp_radix = p->num_routers -1; //TODO allow for parallel connections
     p->radix = p->intra_grp_radix + p->num_global_channels + p->num_cn;
     p->total_routers = p->num_groups * p->num_routers;
     p->total_terminals = p->total_routers * p->num_cn;
@@ -3245,46 +3224,6 @@ terminal_buf_update(terminal_state * s,
 }
 
 void 
-terminal_dally_event( terminal_state * s, 
-		tw_bf * bf, 
-		terminal_dally_message * msg, 
-		tw_lp * lp )
-{
-    s->fwd_events++;
-    s->ross_sample.fwd_events++;
-    //*(int *)bf = (int)0;
-    assert(msg->magic == terminal_magic_num);
-
-    rc_stack_gc(lp, s->st);
-    switch(msg->type)
-        {
-        case T_GENERATE:
-            packet_generate(s,bf,msg,lp);
-        break;
-        
-        case T_ARRIVE:
-            packet_arrive(s,bf,msg,lp);
-        break;
-        
-        case T_SEND:
-            packet_send(s,bf,msg,lp);
-        break;
-        
-        case T_BUFFER:
-            terminal_buf_update(s, bf, msg, lp);
-        break;
-    
-        case T_BANDWIDTH:
-            issue_bw_monitor_event(s, bf, msg, lp);
-        break;
-        
-        default:
-            printf("\n LP %d Terminal message type not supported %d ", (int)lp->gid, msg->type);
-            tw_error(TW_LOC, "Msg type not supported");
-        }
-}
-
-void 
 dragonfly_dally_terminal_final( terminal_state * s, 
       tw_lp * lp )
 {
@@ -3840,8 +3779,11 @@ static void router_packet_receive( router_state * s,
     cur_chunk->msg.vc_index = output_port;
     cur_chunk->msg.next_stop = next_stop;
 
+    // printf("Router %d: Output Port = %d      next stop = %d\n",s->router_id, output_port, next_stop);
+
     //TODO double check the dfdally vc selection process
-    int max_vc_size = 0;
+    int max_vc_size = s->params->cn_vc_size;
+
     output_chan = 0;
     if(output_port < s->params->intra_grp_radix) {
         if(cur_chunk->msg.my_g_hop == 1 && cur_chunk->msg.last_hop == GLOBAL) {
@@ -4314,18 +4256,22 @@ void router_dally_event(router_state * s, tw_bf * bf, terminal_dally_message * m
     switch(msg->type)
     {
         case R_SEND: // Router has sent a packet to an intra-group router (local channel)
+            // printf("%d: router packet send\n", s->router_id);
             router_packet_send(s, bf, msg, lp);
         break;
 
         case R_ARRIVE: // Router has received a packet from an intra-group router (local channel)
+            // printf("%d: router packet recv\n", s->router_id);
             router_packet_receive(s, bf, msg, lp);
         break;
 
         case R_BUFFER:
+            // printf("%d: router buf update\n", s->router_id);
             router_buf_update(s, bf, msg, lp);
         break;
 
         case R_BANDWIDTH:
+            // printf("%d: router bandwidth monitor event\n", s->router_id);
             issue_rtr_bw_monitor_event(s, bf, msg, lp);
         break;
         
@@ -4337,6 +4283,72 @@ void router_dally_event(router_state * s, tw_bf * bf, terminal_dally_message * m
         break;
     }	   
 }
+
+/* Reverse computation handler for a router event */
+void router_dally_rc_event_handler(router_state * s, tw_bf * bf, 
+  terminal_dally_message * msg, tw_lp * lp) 
+{
+    s->rev_events++;
+    s->ross_rsample.rev_events++;
+
+    switch(msg->type) {
+        case R_SEND: 
+            router_packet_send_rc(s, bf, msg, lp);
+        break;
+        case R_ARRIVE: 
+            router_packet_receive_rc(s, bf, msg, lp);
+        break;
+
+        case R_BUFFER: 
+            router_buf_update_rc(s, bf, msg, lp);
+        break;
+        
+        case R_BANDWIDTH:
+            issue_rtr_bw_monitor_event_rc(s, bf, msg, lp);
+        break;
+    }
+}
+
+void 
+terminal_dally_event( terminal_state * s, 
+		tw_bf * bf, 
+		terminal_dally_message * msg, 
+		tw_lp * lp )
+{
+    s->fwd_events++;
+    s->ross_sample.fwd_events++;
+    //*(int *)bf = (int)0;
+    assert(msg->magic == terminal_magic_num);
+
+    rc_stack_gc(lp, s->st);
+    switch(msg->type)
+        {
+        case T_GENERATE:
+            packet_generate(s,bf,msg,lp);
+        break;
+        
+        case T_ARRIVE:
+            packet_arrive(s,bf,msg,lp);
+        break;
+        
+        case T_SEND:
+            packet_send(s,bf,msg,lp);
+        break;
+        
+        case T_BUFFER:
+            terminal_buf_update(s, bf, msg, lp);
+        break;
+    
+        case T_BANDWIDTH:
+            issue_bw_monitor_event(s, bf, msg, lp);
+        break;
+        
+        default:
+            printf("\n LP %d Terminal message type not supported %d ", (int)lp->gid, msg->type);
+            tw_error(TW_LOC, "Msg type not supported");
+        }
+}
+
 
 /* Reverse computation handler for a terminal event */
 void terminal_dally_rc_event_handler(terminal_state * s, tw_bf * bf, terminal_dally_message * msg, tw_lp * lp) 
@@ -4368,31 +4380,6 @@ void terminal_dally_rc_event_handler(terminal_state * s, tw_bf * bf, terminal_da
         default:
             tw_error(TW_LOC, "\n Invalid terminal event type %d ", msg->type);
     }
-}
-
-/* Reverse computation handler for a router event */
-void router_dally_rc_event_handler(router_state * s, tw_bf * bf, 
-  terminal_dally_message * msg, tw_lp * lp) 
-{
-    s->rev_events++;
-    s->ross_rsample.rev_events++;
-
-    switch(msg->type) {
-    case R_SEND: 
-        router_packet_send_rc(s, bf, msg, lp);
-    break;
-    case R_ARRIVE: 
-        router_packet_receive_rc(s, bf, msg, lp);
-    break;
-
-    case R_BUFFER: 
-        router_buf_update_rc(s, bf, msg, lp);
-    break;
-    
-    case R_BANDWIDTH:
-        issue_rtr_bw_monitor_event_rc(s, bf, msg, lp);
-    break;
-}
 }
 
 /* dragonfly compute node and router LP types */
