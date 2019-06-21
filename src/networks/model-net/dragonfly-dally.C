@@ -272,6 +272,8 @@ struct terminal_state
     int packet_gen;
     int packet_fin;
 
+    int total_gen_size;
+
     // Dragonfly specific parameters
     unsigned int router_id;
     unsigned int terminal_id;
@@ -1487,6 +1489,7 @@ terminal_dally_init( terminal_state * s,
 {
     s->packet_gen = 0;
     s->packet_fin = 0;
+    s->total_gen_size = 0;
     s->is_monitoring_bw = 0;
     s->num_term_rc_windows = 100;
     s->rc_index = 0;
@@ -1861,6 +1864,7 @@ static void packet_generate_rc(terminal_state * s, tw_bf * bf, terminal_dally_me
     if(bf->c1)
         s->is_monitoring_bw = 0;
     
+    s->total_gen_size -= msg->packet_size;
     s->packet_gen--;
     packet_gen--;
     s->packet_counter--;
@@ -1946,6 +1950,7 @@ static void packet_generate(terminal_state * s, tw_bf * bf, terminal_dally_messa
         }
     }
     s->packet_gen++;
+    s->total_gen_size += msg->packet_size;
 
     tw_stime ts, nic_ts;
 
@@ -3227,37 +3232,43 @@ void
 dragonfly_dally_terminal_final( terminal_state * s, 
       tw_lp * lp )
 {
+    printf("terminal id %d\n",s->terminal_id);
+
+
 	model_net_print_stats(lp->gid, s->dragonfly_stats_array);
     int written = 0;
   
     if(s->terminal_id == 0)
     {
-        written += sprintf(s->output_buf + written, "# Format <source_id> <source_type> <dest_id> < dest_type>  <link_type> <link_traffic> <link_saturation> <stalled_chunks>");
+        written += sprintf(s->output_buf + written, "# Format <source_id> <source_type> <dest_id> < dest_type>  <link_type> <link_traffic> <link_saturation> <stalled_chunks>\n");
 //        fprintf(fp, "# Format <LP id> <Terminal ID> <Total Data Size> <Avg packet latency> <# Flits/Packets finished> <Avg hops> <Busy Time> <Max packet Latency> <Min packet Latency >\n");
     }
-    written += sprintf(s->output_buf + written, "\n%u %s %llu %s %s %llu %lf %d",
+    written += sprintf(s->output_buf + written, "%u %s %llu %s %s %llu %lf %d",
             s->terminal_id, "T", s->router_id, "R", "CN", LLU(s->total_msg_size), s->busy_time, -1); //note that terminals don't have stalled chuncks because of model net scheduling only gives a terminal what it can handle (-1 to show N/A)
 
     lp_io_write(lp->gid, (char*)"dragonfly-link-stats", written, s->output_buf); 
     
-    if(s->terminal_id == 0)
-    {
-        //fclose(dragonfly_term_bw_log);
-        char meta_filename[128];
-        sprintf(meta_filename, "dragonfly-cn-stats.meta");
+    // if(s->terminal_id == 0)
+    // {
+    //     //fclose(dragonfly_term_bw_log);
+    //     char meta_filename[128];
+    //     sprintf(meta_filename, "dragonfly-cn-stats.meta");
 
-        FILE * fp = NULL;
-        fp = fopen(meta_filename, "w+");
-        if(fp)
-          fprintf(fp, "# Format <LP id> <Terminal ID> <Total Data Size> <Avg packet latency> <# Flits/Packets finished> <Busy Time> <Max packet Latency> <Min packet Latency >\n");
-        fclose(fp);
-    }
+    //     FILE * fp = NULL;
+    //     fp = fopen(meta_filename, "w");
+    //     if(fp)
+    //       fprintf(fp, "# Format <LP id> <Terminal ID> <Total Data Size> <Avg packet latency> <# Flits/Packets finished> <Busy Time> <Max packet Latency> <Min packet Latency >\n");
+    //     fclose(fp);
+    // }
    
     written = 0;
-    written += sprintf(s->output_buf2 + written, "%llu %llu %lf %lf %lf %lf %llu %lf\n", 
-            lp->gid, s->terminal_id, s->total_time/s->finished_chunks, 
-            s->busy_time, s->max_latency, s->min_latency,
-            s->finished_packets, (double)s->total_hops/s->finished_chunks);
+    if(s->terminal_id == 0)
+    {
+        written += sprintf(s->output_buf2 + written, "# Format <LP id> <Terminal ID> <Total Data Sent> <Total Data Received> <Avg packet latency> <Max packet Latency> <Min packet Latency> <# Packets finished> <Avg Hops> <Busy Time>\n");
+    }
+    written += sprintf(s->output_buf2 + written, "%llu %llu %llu %llu %lf %lf %lf %llu %lf %lf\n", 
+            lp->gid, s->terminal_id, s->total_gen_size, s->total_msg_size, s->total_time/s->finished_chunks, s->max_latency, s->min_latency,
+            s->finished_packets, (double)s->total_hops/s->finished_chunks), s->busy_time;
 
     if(s->terminal_msgs[0] != NULL) 
       printf("[%llu] leftover terminal messages \n", LLU(lp->gid));
