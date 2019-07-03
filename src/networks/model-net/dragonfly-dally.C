@@ -54,6 +54,13 @@
 #define MAX_STATS 65536
 #define SHOW_ADAP_STATS 1
 
+//Routing Defines
+//NONMIN_INCLUDE_SOURCE_DEST: Do we allow source and destination groups to be viable choces for indirect group (i.e. do we allow nonminimal routing to sometimes be minimal?)
+#define NONMIN_INCLUDE_SOURCE_DEST 0
+
+
+//End routing defines
+
 #define LP_CONFIG_NM_TERM (model_net_lp_config_names[DRAGONFLY_DALLY])
 #define LP_METHOD_NM_TERM (model_net_method_names[DRAGONFLY_DALLY])
 #define LP_CONFIG_NM_ROUT (model_net_lp_config_names[DRAGONFLY_DALLY_ROUTER])
@@ -99,6 +106,7 @@ struct bLink {
 // /* contains mapping between source router and destination group via link (link
 //  * has dest ID)*/
 // static vector< map< int, vector<bLink> > > interGroupLinks;
+
 /*MM: Maintains a list of routers connecting the source and destination groups */
 static vector< vector< vector<int> > > connectionList;
 
@@ -415,11 +423,30 @@ enum ROUTING_ALGO
     PROG_ADAPTIVE
 };
 
-enum LINK_TYPE
+static bool isRoutingAdaptive(int alg)
 {
-    GREEN,
-    BLACK,
-};
+    if (alg == ADAPTIVE || alg == PROG_ADAPTIVE)
+        return true;
+    else
+        return false;
+}
+
+static bool isRoutingMinimal(int alg)
+{
+    if (alg == MINIMAL)
+        return true;
+    else
+        return false;
+}
+
+static bool isRoutingNonminimalExplicit(int alg)
+{
+    if (alg == NON_MINIMAL)
+        return true;
+    else
+        return false;
+}
+
 struct router_state
 {
     unsigned int router_id;
@@ -2380,7 +2407,8 @@ static void packet_send(terminal_state * s, tw_bf * bf, terminal_dally_message *
     m->magic = router_magic_num;
     m->path_type = -1;
     m->local_event_size_bytes = 0;
-    m->intm_rtr_id = -1;
+    m->is_intm_grp_visited = 0;
+    m->intm_grp_id = -1;
     tw_event_send(e);
 
 
@@ -3561,9 +3589,87 @@ static Connection dfdally_minimal_routing(router_state *s, tw_bf *bf, terminal_d
     }
 }
 
+
+static void dfdally_select_intermediate_group(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
+{
+    int fdest_group_id = fdest_router_id / s->params->num_routers;
+    int origin_group_id = msg->origin_router_id / s->params->num_routers;
+
+    // Has an intermediate group been chosen yet? (Should happen at first router)
+    if (msg->intm_grp_id == -1) { // Intermediate group hasn't been chosen yet, choose one randomly and route toward it
+        assert(s->router_id == msg->origin_router_id);
+        msg->num_rngs++;
+        int rand_group_id;
+        if (NONMIN_INCLUDE_SOURCE_DEST) //then any group is a valid intermediate group
+            rand_group_id = tw_rand_integer(lp->rng, 0, s->params->num_groups-1);
+        else { //then we don't consider source or dest groups as valid intermediate groups
+            vector<int> group_list;
+            for (int i = 0; i < s->params->num_groups; i++)
+            {
+                if ((i != origin_group_id) && (i != fdest_group_id)) {
+                    group_list.push_back(i);
+                }
+            }
+            int rand_sel = tw_rand_integer(lp->rng, 0, group_list.size()-1);
+            rand_group_id = group_list[rand_sel];
+        }
+        msg->intm_grp_id = rand_group_id;
+    }
+    else {
+        tw_error(TW_LOC, "Called to select intermediate group but it was already set!");
+    }
+}
+
+// Coloquially: "Valiant Group Routing"
+// This follows the randomized indirect routing algorithm detailed in "Cost-Efficient Dragonfly topology for Large-Scale Systems" and
+// "Technology-Driven, Highly-Scalable Dragonfly Topology" by Kim, Dally, Scott, and Abts
+// They sourced it from "A scheme for fast parallel communication" by L.G. Valiant
+// It differs from true valiant routing in that it randomly selects a GROUP and routes to it - not a random intermediate router
 static Connection dfdally_nonminimal_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
 {
+    int my_router_id = s->router_id;
+    int my_group_id = s->router_id / s->params->num_routers;
+    int fdest_group_id = fdest_router_id / s->params->num_routers;
+    int origin_group_id = msg->origin_router_id / s->params->num_routers;
 
+    assert(msg->intm_grp_id != -1); // This needs to have already been set.
+    //The setting of intm_grp_id is kept out of this function so that other routing algorithms can utilize this routing function
+    //and set it themselves based on the context. This helps avoid an instance like: prog-adaptive routing, second router in path decides
+    //to take non-minimal routing but the pre-selected intermediate group ID isn't accessible to it and would require re-routing and 
+    //thus take extra hops. Possible illegal move and could cause deadlock.
+
+    if (my_group_id == msg->intm_grp_id) //then we've visited the intermediate group by definition
+        msg->is_intm_grp_visited = 1;
+
+    int next_dest_group_id; //The ID of the group that we are aiming for next - either intermediate group or fdest group
+    if (msg->is_intm_grp_visited == 1) // Then we need to route to the fdest group
+        next_dest_group_id = fdest_group_id;
+    else // Then we haven't visited the intermediate group yet and need to route there first
+        next_dest_group_id = msg->intm_grp_id;
+
+    // Do I have a direct connection to the next_dest group?
+    vector< Connection > conns_to_next_group = s->connMan->get_connections_to_group(next_dest_group_id);
+    if (conns_to_next_group.size() > 0) { //Then yes I do
+        msg->num_rngs++;
+        int rand_sel = tw_rand_integer(lp->rng, 0, conns_to_next_group.size()-1);
+        Connection next_conn = conns_to_next_group[rand_sel];
+        return next_conn;
+    }
+    else { // I need to route to a router in my group that does have a direct connection to the intermediate group
+        vector<int> connecting_router_ids = connectionList[my_group_id][next_dest_group_id];
+        assert(connecting_router_ids.size() > 0);
+        msg->num_rngs++;
+        int rand_sel = tw_rand_integer(lp->rng, 0, connecting_router_ids.size()-1);
+        int conn_router_id = connecting_router_ids[rand_sel];
+
+        //There may be parallel connections to the same router - randomly select from them
+        vector< Connection > conns_to_next_router = s->connMan->get_connections_to_gid(conn_router_id, CONN_LOCAL);
+        assert(conns_to_next_router.size() > 0);
+        msg->num_rngs++;
+        rand_sel = tw_rand_integer(lp->rng, 0, conns_to_next_router.size()-1);
+        Connection next_conn = conns_to_next_router[rand_sel];
+        return next_conn;
+    }
 }
 
 static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
@@ -3578,22 +3684,40 @@ static Connection do_dfdally_routing(router_state *s, tw_bf *bf, terminal_dally_
     int fdest_group_id = fdest_router_id / s->params->num_routers;
     int origin_group_id = msg->origin_router_id / s->params->num_routers;
     
-    if (my_router_id == fdest_router_id) {//destination router reached, next dest = final terminal destination
+    // Local Destination Group Routing --------------
+    if (my_router_id == fdest_router_id) { //destination router reached, next dest = final terminal destination
         vector< Connection > poss_next_stops = s->connMan->get_connections_to_gid(msg->dfdally_dest_terminal_id, CONN_TERMINAL);
         if (poss_next_stops.size() < 1)
-            tw_error(TW_LOC, "Destination Router %d: No connection to destination terminal %d\n", s->router_id, msg->dfdally_dest_terminal_id);
-            Connection best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_next_stops);
-            return best_min_conn;
+            tw_error(TW_LOC, "Destination Router %d: No connection to destination terminal %d\n", s->router_id, msg->dfdally_dest_terminal_id); //shouldn't happen unless math was wrong
+        Connection best_min_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, poss_next_stops);
+        return best_min_conn;
     }
+    else if (my_group_id == fdest_group_id) { //Then we're already in the destination group and should just route to the fdest router
+        vector< Connection > conns_to_fdest = s->connMan->get_connections_to_gid(fdest_router_id, CONN_LOCAL);
+        if (conns_to_fdest.size() < 1)
+            tw_error(TW_LOC, "Destination Group %d: No connection to destination router %d\n", s->router_id, fdest_router_id); //shouldn't happen unless the connections weren't set up / loaded correctly
+
+        if (isRoutingAdaptive(routing)) { // Pick the best connection
+            Connection best_conn = get_absolute_best_connection_from_conns(s, bf, msg, lp, conns_to_fdest);
+            return best_conn;
+        }
+        else { //Randomize the next legal stop
+            msg->num_rngs++;
+            int rand_sel = tw_rand_integer(lp->rng, 0, conns_to_fdest.size()-1);
+            Connection next_conn = conns_to_fdest[rand_sel];
+            return next_conn;
+        }
+    }
+    // End Local Destination Group Routing -------------
 
     Connection next_stop_conn;
-
     switch (routing)
     {
         case MINIMAL:
             next_stop_conn = dfdally_minimal_routing(s, bf, msg, lp, fdest_router_id);
             break;
         case NON_MINIMAL:
+            msg->path_type = NON_MINIMAL;
             next_stop_conn = dfdally_nonminimal_routing(s, bf, msg, lp, fdest_router_id);
             break;
         case ADAPTIVE:
@@ -3764,9 +3888,14 @@ static void router_packet_receive( router_state * s,
     terminal_dally_message_list * cur_chunk = (terminal_dally_message_list*)calloc(1, sizeof(terminal_dally_message_list));
     init_terminal_dally_message_list(cur_chunk, msg);
     
-    /* Set the default route as minimal for prog-adaptive */
-    if(cur_chunk->msg.last_hop == TERMINAL)
-        cur_chunk->msg.path_type = MINIMAL;
+    if(cur_chunk->msg.last_hop == TERMINAL) { // We are first router in the path
+        cur_chunk->msg.path_type = MINIMAL; // Route always starts as minimal
+
+        if (msg->intm_grp_id == -1)
+        {
+            dfdally_select_intermediate_group(s, bf, &(cur_chunk->msg), lp, dest_router_id);
+        }
+    }
 
     Connection next_stop_conn = do_dfdally_routing(s, bf, &(cur_chunk->msg), lp, dest_router_id);
 

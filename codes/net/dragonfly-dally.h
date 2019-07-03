@@ -52,13 +52,13 @@ struct terminal_dally_message
 
   int next_stop;
 
-  short nonmin_done;
   /* Intermediate LP ID from which this message is coming */
   unsigned int intm_lp_id;
   /* last hop of the message, can be a terminal, local router or global router */
   short last_hop;
    /* For routing */
-  int intm_rtr_id;
+  short is_intm_grp_visited;
+  int intm_grp_id;
   int saved_src_dest;
   int saved_src_chan;
 
