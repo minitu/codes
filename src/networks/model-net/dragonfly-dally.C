@@ -3426,45 +3426,6 @@ void dragonfly_dally_router_final(router_state * s, tw_lp * lp)
     }
 }
 
-int find_chan(int router_id, int dest_grp_id, int num_routers)
-{
-    int my_grp_id = router_id / num_routers;
-    for(int i = 0; i < connectionList[my_grp_id][dest_grp_id].size(); i++)
-    {
-        if(connectionList[my_grp_id][dest_grp_id][i] == router_id)
-            return i;
-    }
-    return -1;
-}
-
-/* get the next stop for the current packet
- * determines if it is a router within a group, a router in another group
- * or the destination terminal */
-static tw_lpid get_next_stop(router_state * s, 
-              tw_lp * lp,
-              tw_bf * bf,
-		      terminal_dally_message * msg, 
-		      int dest_router_id,
-              int adap_chan,
-              int do_chan_selection, 
-              int get_direct_con,
-              short* rng_counter)
-{
-
-}
-
-/* gets the output port corresponding to the next stop of the message */
-static int 
-get_output_port( router_state * s, 
-		terminal_dally_message * msg, 
-        tw_lp * lp, 
-        tw_bf * bf,
-		int next_stop, 
-        short* rng_counter)
-{
-
-}
-
 static int dfdally_score_connection(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, Connection conn, conn_minimality_t c_minimality)
 {
     int score = 0;
@@ -3672,6 +3633,19 @@ static Connection dfdally_nonminimal_routing(router_state *s, tw_bf *bf, termina
     }
 }
 
+static vector< Connection > dfdally_poll_k_connections(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, vector< Connection > conns, int k)
+{
+    
+}
+
+static Connection dfdally_get_best_from_k_connections(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, vector< Connection > conns, int k)
+{
+    vector< Connection > k_conns = dfdally_poll_k_connections(s, bf, msg, lp, conns, k);
+    return get_absolute_best_connection_from_conns(s, bf, msg, lp, k_conns);
+}
+
+//Uses PAR algorithm
+//Routing starts minimally, if 
 static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp, int fdest_router_id)
 {
 
