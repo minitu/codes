@@ -72,9 +72,6 @@ static int max_lvc_intm_g = 3;
 static int min_gvc_src_g = 0;
 static int min_gvc_intm_g = 1;
 
-static int BIAS_MIN = 1;
-static int DF_DALLY = 0;
-
 static tw_stime max_qos_monitor = 5000000000;
 static long num_local_packets_sr = 0;
 static long num_local_packets_sg = 0;
@@ -830,22 +827,6 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
             fprintf(stderr, "Buffer size of global channels not specified, setting to %d\n", p->global_vc_size);
     }
 
-    rc = configuration_get_value_int(&config, "PARAMS", "df-dally-vc", anno, &DF_DALLY);
-    if(rc) {
-        DF_DALLY = 0;
-    }
-
-    if(DF_DALLY != 1)
-        tw_error(TW_LOC, "\ndf-dally-vc must be 1 to run this model\n");
-    
-    rc = configuration_get_value_int(&config, "PARAMS", "minimal-bias", anno, &BIAS_MIN);
-    if(rc) {
-        BIAS_MIN = 0;
-    }
-    else {
-        if(!myRank)
-	        fprintf(stderr,"Setting minimal bias\n");
-    }
 
     rc = configuration_get_value_int(&config, "PARAMS", "cn_vc_size", anno, &p->cn_vc_size);
     if(rc) {
@@ -958,18 +939,8 @@ static void dragonfly_read_config(const char * anno, dragonfly_param *params)
     //     printf("Overriding num_vcs: p->num_vcs=%d\n",p->num_vcs);
     // }
    
-    if(DF_DALLY == 0) 
-    {
-        //if(routing == PROG_ADAPTIVE)
-        //    p->num_vcs = 10;
-        //else
-        p->num_vcs = 8;
-    }
-    else
-    {
-        p->num_vcs = 4;
-    }
-
+    p->num_vcs = 4;
+    
     if(p->num_qos_levels > 1)
         p->num_vcs = p->num_qos_levels * p->num_vcs;
 
