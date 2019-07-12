@@ -1276,7 +1276,7 @@ void dragonfly_dally_report_stats()
             dragonfly_print_params(stored_params);
 
         printf("\nAverage number of hops traversed %f average chunk latency %lf us maximum chunk latency %lf us avg message size %lf bytes finished messages %lld finished chunks %lld\n", 
-                (float)avg_hops/total_finished_chunks, avg_time/(total_finished_chunks*1000), max_time/1000, (float)final_msg_sz/total_finished_msgs, total_finished_msgs, total_finished_chunks);
+                (float)avg_hops/total_finished_chunks, (float) avg_time/total_finished_chunks/1000, max_time/1000, (float)final_msg_sz/total_finished_msgs, total_finished_msgs, total_finished_chunks);
         if(routing == ADAPTIVE || routing == PROG_ADAPTIVE || SHOW_ADAP_STATS)
                 printf("\nADAPTIVE ROUTING STATS: %d chunks routed minimally %d chunks routed non-minimally completed packets %lld \n", 
                         total_minimal_packets, total_nonmin_packets, total_finished_chunks);
@@ -3257,7 +3257,7 @@ void
 dragonfly_dally_terminal_final( terminal_state * s, 
       tw_lp * lp )
 {
-    printf("terminal id %d\n",s->terminal_id);
+    // printf("terminal id %d\n",s->terminal_id);
 
 
 	model_net_print_stats(lp->gid, s->dragonfly_stats_array);
@@ -3724,22 +3724,36 @@ static vector< Connection > dfdally_poll_k_connections(router_state *s, tw_bf *b
     vector< Connection > k_conns;
     if (conns.size() == 0)
     {
-        msg->num_rngs += k;
-        for(int i = 0; i < k; i++)
-        {
-            tw_rand_integer(lp->rng,0,1);
-        }
+        // msg->num_rngs += k;
+        // for(int i = 0; i < k; i++)
+        // {
+        //     tw_rand_integer(lp->rng,0,1);
+        // }
         return k_conns;
     }
 
     if (conns.size() == 1)
     {
-        msg->num_rngs += k;
-        for(int i = 0; i < k; i++)
-        {
-            tw_rand_integer(lp->rng,0,1);
-        }
+        // msg->num_rngs += k;
+        // for(int i = 0; i < k; i++)
+        // {
+        //     tw_rand_integer(lp->rng,0,1);
+        // }
         k_conns.push_back(conns[0]);
+        return k_conns;
+    }
+
+    if (k == 2) { //This is the default and so let's make a cheaper optimization for it
+        msg->num_rngs += 2;
+
+        int rand_sel_1, rand_sel_2, rand_sel_2_offset;
+        rand_sel_1 = tw_rand_integer(lp->rng, 0, conns.size()-1);
+        rand_sel_2_offset = tw_rand_integer(lp->rng, 0, conns.size()-1);
+        rand_sel_2 = (rand_sel_1 + rand_sel_2_offset) % conns.size();
+
+        k_conns.push_back(conns[rand_sel_1]);
+        k_conns.push_back(conns[rand_sel_2]);
+
         return k_conns;
     }
     // if (k > conns.size())
@@ -3818,9 +3832,9 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
     int min_score = dfdally_score_connection(s, bf, msg, lp, best_min_conn, C_MIN);
     int nonmin_score = dfdally_score_connection(s, bf, msg, lp, best_nonmin_conn, C_NONMIN);
 
-    if (min_score < adaptive_threshold)
+    if (min_score <= adaptive_threshold)
         return best_min_conn;
-    else if (min_score < nonmin_score)
+    else if (min_score <= nonmin_score)
         return best_min_conn;
     else {
         msg->path_type = NON_MINIMAL;
@@ -3887,10 +3901,14 @@ static Connection do_dfdally_routing(router_state *s, tw_bf *bf, terminal_dally_
     return next_stop_conn;
 }
 
-static Connection do_dfdally_routing_rc(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp)
-{
-
-}
+//commented out cus this is handled by router_packet_receive_rc();
+// static Connection do_dfdally_routing_rc(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp)
+// {
+//     for(int i = 0; i < msg->num_rngs; i++)
+//     {
+//         tw_rand_reverse_unif(lp->rng);
+//     }
+// }
 
 static void router_verify_valid_receipt(router_state *s, tw_bf *bf, terminal_dally_message *msg, tw_lp *lp)
 {
@@ -4051,6 +4069,7 @@ static void router_packet_receive( router_state * s,
     }
 
     Connection next_stop_conn = do_dfdally_routing(s, bf, &(cur_chunk->msg), lp, dest_router_id);
+    msg->num_rngs += (cur_chunk->msg).num_rngs; //make sure we're counting the rngs called during do_dfdally_routing()
 
     if (s->connMan->is_any_connection_to(next_stop_conn.dest_gid) == false)
         tw_error(TW_LOC, "Router %d does not have a connection to chosen destination %d\n", s->router_id, next_stop_conn.dest_gid);
