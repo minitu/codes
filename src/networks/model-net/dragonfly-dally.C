@@ -2510,7 +2510,6 @@ static void packet_arrive_rc(terminal_state * s, tw_bf * bf, terminal_dally_mess
     s->fin_hops_sample -= msg->my_N_hop;
     s->ross_sample.fin_hops_sample -= msg->my_N_hop;
     s->fin_hops_ross_sample -= msg->my_N_hop;
-    dragonfly_total_time  = msg->saved_total_time;
     s->fin_chunks_time = msg->saved_sample_time;
     s->ross_sample.fin_chunks_time = msg->saved_sample_time;
     s->fin_chunks_time_ross_sample = msg->saved_fin_chunks_ross;
@@ -2727,9 +2726,6 @@ static void packet_arrive(terminal_state * s, tw_bf * bf, terminal_dally_message
     /* save the total time per LP */
     msg->saved_avg_time = s->total_time;
     s->total_time += (tw_now(lp) - msg->travel_start_time); 
-
-    msg->saved_total_time = dragonfly_total_time;
-    dragonfly_total_time += tw_now( lp ) - msg->travel_start_time;
     total_hops += msg->my_N_hop;
     s->total_hops += msg->my_N_hop;
     s->fin_hops_sample += msg->my_N_hop;
@@ -3258,7 +3254,7 @@ dragonfly_dally_terminal_final( terminal_state * s,
       tw_lp * lp )
 {
     // printf("terminal id %d\n",s->terminal_id);
-
+    dragonfly_total_time += s->total_time; //increment the PE level time counter
 
 	model_net_print_stats(lp->gid, s->dragonfly_stats_array);
     int written = 0;
