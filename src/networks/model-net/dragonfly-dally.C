@@ -3711,6 +3711,10 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
     
     // The check for detination group local routing has already been completed - we can assume we're not in the destination group
 
+    // are we in the intermediate group?
+    if (my_group_id == msg->intm_grp_id)
+        msg->is_intm_grp_visited = 1;
+
     Connection nextStopConn;
     vector< Connection > poss_min_next_stops = get_legal_minimal_stops(s, bf, msg, lp, fdest_router_id);
     vector< Connection > poss_nonmin_next_stops = get_legal_nonminimal_stops(s, bf, msg, lp, fdest_router_id);
@@ -3739,6 +3743,11 @@ static Connection dfdally_prog_adaptive_routing(router_state *s, tw_bf *bf, term
 
     int min_score = dfdally_score_connection(s, bf, msg, lp, best_min_conn, C_MIN);
     int nonmin_score = dfdally_score_connection(s, bf, msg, lp, best_nonmin_conn, C_NONMIN);
+
+    if ((msg->path_type == NON_MINIMAL) && (msg->is_intm_grp_visited != 1)) { //if we're nonminimal and haven't reached the intermediate group yet
+        //must pick non-minimal (if we have visited, we can pick minimal then as nonminimal will be an empty vector)
+        return best_nonmin_conn;
+    }
 
     if (min_score <= adaptive_threshold)
         return best_min_conn;
