@@ -1301,9 +1301,9 @@ void issue_bw_monitor_event(terminal_state * s, tw_bf * bf, terminal_dally_messa
         return;
     
     msg->num_cll++;
-    terminal_plus_message * m; 
+    terminal_dally_message * m; 
     tw_stime bw_ts = bw_reset_window + codes_local_latency(lp);
-    tw_event * e = model_net_method_event_new(lp->gid, bw_ts, lp, DRAGONFLY_PLUS,
+    tw_event * e = model_net_method_event_new(lp->gid, bw_ts, lp, DRAGONFLY_DALLY,
             (void**)&m, NULL); 
     m->type = T_BANDWIDTH;
     m->magic = terminal_magic_num; 
@@ -1396,9 +1396,9 @@ void issue_rtr_bw_monitor_event(router_state *s, tw_bf *bf, terminal_dally_messa
     
     msg->num_cll++;
     tw_stime bw_ts = bw_reset_window + codes_local_latency(lp);
-    terminal_plus_message *m;
+    terminal_dally_message *m;
     tw_event * e = model_net_method_event_new(lp->gid, bw_ts, lp,
-            DRAGONFLY_PLUS_ROUTER, (void**)&m, NULL);
+            DRAGONFLY_DALLY_ROUTER, (void**)&m, NULL);
     m->type = R_BANDWIDTH;
     m->magic = router_magic_num;
     tw_event_send(e);
