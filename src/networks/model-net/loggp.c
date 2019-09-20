@@ -808,7 +808,7 @@ static const struct param_table_entry* find_params(
 
     for(i=0; i < params->table_size; i++)
     {
-        if(params->table[i].size > msg_size)
+        if(params->table[i].size >= msg_size)
         {
             break;
         }
