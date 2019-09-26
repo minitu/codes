@@ -76,8 +76,6 @@ static int payload_sz = 1024;
 /* Doing LP IO*/
 static char* params = NULL;
 static char lp_io_dir[256] = {'\0'};
-static char sampling_dir[32] = {'\0'};
-static char mpi_msg_dir[32] = {'\0'};
 static lp_io_handle io_handle;
 static unsigned int lp_io_use_suffix = 0;
 static int do_lp_io = 0;
@@ -2898,13 +2896,6 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
     return -1;
   }
 
-  // Create output directories
-  sprintf(sampling_dir, "sampling_dir");
-  mkdir(sampling_dir, S_IRUSR | S_IWUSR | S_IXUSR);
-
-  sprintf(mpi_msg_dir, "mpi_msg_dir");
-  mkdir(mpi_msg_dir, S_IRUSR | S_IWUSR | S_IXUSR);
-
   // Set up workload traces
   if (strlen(workload_conf_file) > 0) {
     FILE *name_file = fopen(workload_conf_file, "r");
@@ -2992,6 +2983,10 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
 
   // Create message info file
   if (enable_msg_tracking) {
+    char mpi_msg_dir[32];
+    sprintf(mpi_msg_dir, "mpi_msg_dir");
+    mkdir(mpi_msg_dir, S_IRUSR | S_IWUSR | S_IXUSR);
+
     char msg_log_name[128];
     sprintf(msg_log_name, "%s/log-%s", mpi_msg_dir, cur_time_str);
 
@@ -3004,6 +2999,10 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
 
   // Set up sampling
   if (enable_sampling) {
+    char sampling_dir[32];
+    sprintf(sampling_dir, "sampling_dir");
+    mkdir(sampling_dir, S_IRUSR | S_IWUSR | S_IXUSR);
+
     char sampling_agg_log_name[128];
     char sampling_meta_log_name[128];
     sprintf(sampling_agg_log_name, "%s/agg-%s-%d.bin", sampling_dir, cur_time_str, rank);
