@@ -2326,107 +2326,98 @@ void nw_test_event_handler(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
   }
 }
 
-static void get_next_mpi_operation_rc(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp)
+static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
 {
-    codes_workload_get_next_rc(wrkld_id, s->app_id, s->local_rank, m->mpi_op);
+  codes_workload_get_next_rc(wrkld_id, s->app_id, s->local_rank, m->mpi_op);
 
-	if(m->op_type == CODES_WK_END)
-    {
-        s->is_finished = 0;
+  if (m->op_type == CODES_WK_END) {
+    s->is_finished = 0;
 
-        if(bf->c9)
-            return;
+    if (bf->c9)
+      return;
 
-        if(bf->c19)
-            return;
+    if (bf->c19)
+      return;
 
-        notify_neighbor_rc(s, lp, bf, m);
-		return;
-    }
-	switch(m->op_type)
-	{
-		case CODES_WK_SEND:
-		case CODES_WK_ISEND:
-		{
-            codes_exec_mpi_send_rc(s, bf, m, lp);
-		}
-		break;
+    notify_neighbor_rc(s, lp, bf, m);
+    return;
+  }
 
-		case CODES_WK_IRECV:
-		case CODES_WK_RECV:
-		{
-			codes_exec_mpi_recv_rc(s, bf, m, lp);
-			s->num_recvs--;
-                        s->ross_sample.num_recvs--;
-		}
-		break;
-
-
-        case CODES_WK_DELAY:
-		{
-			s->num_delays--;
-            if(disable_compute)
-                issue_next_event_rc(lp);
-            else
-            {
-                if (bf->c28)
-                    tw_rand_reverse_unif(lp->rng);
-                s->compute_time = m->rc.saved_delay;
-                s->ross_sample.compute_time = m->rc.saved_delay_sample;
-            }
-		}
-		break;
-		case CODES_WK_ALLREDUCE:
-        {
-            if(bf->c27)
-            {
-                s->num_all_reduce--;
-                s->col_time = m->rc.saved_send_time; 
-                s->all_reduce_time = m->rc.saved_delay;
-            }
-            else
-            {
-               s->col_time = 0; 
-            }
-            issue_next_event_rc(lp);
+  switch (m->op_type) {
+    case CODES_WK_SEND:
+    case CODES_WK_ISEND:
+      {
+        codes_exec_mpi_send_rc(s, bf, m, lp);
+      }
+      break;
+    case CODES_WK_IRECV:
+    case CODES_WK_RECV:
+      {
+        codes_exec_mpi_recv_rc(s, bf, m, lp);
+        s->num_recvs--;
+        s->ross_sample.num_recvs--;
+      }
+      break;
+    case CODES_WK_DELAY:
+      {
+        s->num_delays--;
+        if (disable_compute)
+          issue_next_event_rc(lp);
+        else {
+          if (bf->c28)
+            tw_rand_reverse_unif(lp->rng);
+          s->compute_time = m->rc.saved_delay;
+          s->ross_sample.compute_time = m->rc.saved_delay_sample;
         }
-        break;
-		case CODES_WK_BCAST:
-		case CODES_WK_ALLGATHER:
-		case CODES_WK_ALLGATHERV:
-		case CODES_WK_ALLTOALL:
-		case CODES_WK_ALLTOALLV:
-		case CODES_WK_REDUCE:
-		case CODES_WK_COL:
-		{
-			s->num_cols--;
-		    issue_next_event_rc(lp);
+      }
+      break;
+    case CODES_WK_ALLREDUCE:
+      {
+        if (bf->c27) {
+          s->num_all_reduce--;
+          s->col_time = m->rc.saved_send_time;
+          s->all_reduce_time = m->rc.saved_delay;
         }
-		break;
-
-		case CODES_WK_WAITSOME:
-		case CODES_WK_WAITANY:
-        {
-           s->num_waitsome--;
-           issue_next_event_rc(lp);
+        else {
+          s->col_time = 0;
         }
-        break;
-
-		case CODES_WK_WAIT:
-		{
-			s->num_wait--;
-			codes_exec_mpi_wait_rc(s, bf, lp, m);
-		}
-		break;
-		case CODES_WK_WAITALL:
-		{
-			s->num_waitall--;
-            codes_exec_mpi_wait_all_rc(s, bf, m, lp);
-		}
-		break;
-		default:
-			printf("\n Invalid op type %d ", m->op_type);
-	}
+        issue_next_event_rc(lp);
+      }
+      break;
+    case CODES_WK_BCAST:
+    case CODES_WK_ALLGATHER:
+    case CODES_WK_ALLGATHERV:
+    case CODES_WK_ALLTOALL:
+    case CODES_WK_ALLTOALLV:
+    case CODES_WK_REDUCE:
+    case CODES_WK_COL:
+      {
+        s->num_cols--;
+        issue_next_event_rc(lp);
+      }
+      break;
+    case CODES_WK_WAITSOME:
+    case CODES_WK_WAITANY:
+      {
+        s->num_waitsome--;
+        issue_next_event_rc(lp);
+      }
+      break;
+    case CODES_WK_WAIT:
+      {
+        s->num_wait--;
+        codes_exec_mpi_wait_rc(s, bf, lp, m);
+      }
+      break;
+    case CODES_WK_WAITALL:
+      {
+        s->num_waitall--;
+        codes_exec_mpi_wait_all_rc(s, bf, m, lp);
+      }
+      break;
+    default:
+      printf("Invalid op type %d\n", m->op_type);
+  }
 }
 
 static void get_next_mpi_operation(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp) {
