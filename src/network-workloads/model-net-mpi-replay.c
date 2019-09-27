@@ -333,33 +333,27 @@ static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_
 static void issue_next_event(tw_lp* lp);
 static void issue_next_event_rc(tw_lp* lp);
 
+// Helper functions for handling MPI message queues
+// Upon arrival of local completion message, inserts operation in completed send queue
+// upon arrival of an isend operation, updates the arrival queue of the network
+static void update_completed_queue(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, dumpi_req_id req_id);
+static void update_completed_queue_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
+static void update_arrival_queue(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
+static void update_arrival_queue_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
+// Callback to message sender for computing message time
+static void update_message_time(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
+static void update_message_time_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 
-///////////////////// HELPER FUNCTIONS FOR MPI MESSAGE QUEUE HANDLING ///////////////
-/* upon arrival of local completion message, inserts operation in completed send queue */
-/* upon arrival of an isend operation, updates the arrival queue of the network */
-static void update_completed_queue(
-        nw_state * s, tw_bf * bf, nw_message * m, tw_lp * lp, dumpi_req_id req_id);
-/* reverse of the above function */
-static void update_completed_queue_rc(
-        nw_state*s,
-        tw_bf * bf,
-        nw_message * m,
-        tw_lp * lp);
-static void update_arrival_queue(
-        nw_state*s, tw_bf* bf, nw_message* m, tw_lp * lp);
-/* reverse of the above function */
-static void update_arrival_queue_rc(
-        nw_state*s, tw_bf* bf, nw_message* m, tw_lp * lp);
-/* callback to a message sender for computing message time */
-static void update_message_time(
-        nw_state*s, tw_bf* bf, nw_message* m, tw_lp * lp);
-/* reverse for computing message time */
-static void update_message_time_rc(
-        nw_state*s, tw_bf* bf, nw_message* m, tw_lp * lp);
+// Time conversion functions
+static tw_stime s_to_ns(tw_stime s)
+{
+    return (s * (1000.0 * 1000.0 * 1000.0));
+}
 
-/* conversion from seconds to eanaoseconds */
-static tw_stime s_to_ns(tw_stime ns);
-
+static tw_stime ns_to_s(tw_stime ns)
+{
+    return (ns / (1000.0 * 1000.0 * 1000.0));
+}
 
 // Update information on this message size.
 // Only called when message tracking is enabled.
@@ -1291,17 +1285,6 @@ static void codes_exec_mpi_send(nw_state* s,
        bf->c4 = 1;
 	   issue_next_event(lp);
     }
-}
-
-/* convert seconds to ns */
-static tw_stime s_to_ns(tw_stime s)
-{
-    return(s * (1000.0 * 1000.0 * 1000.0));
-}
-/* convert seconds to ns */
-static tw_stime ns_to_s(tw_stime ns)
-{
-    return(ns / (1000.0 * 1000.0 * 1000.0));
 }
 
 static void update_completed_queue_rc(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * lp)
