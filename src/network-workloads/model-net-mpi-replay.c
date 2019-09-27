@@ -322,30 +322,15 @@ struct nw_message
    } rc;
 };
 
-static void send_ack_back(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp, mpi_msg_queue * mpi_op, int matched_req);
-
-static void send_ack_back_rc(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp);
-/* executes MPI isend and send operations */
-static void codes_exec_mpi_send(
-        nw_state* s, tw_bf * bf, nw_message * m, tw_lp* lp, struct codes_workload_op * mpi_op, int is_rend);
-/* execute MPI irecv operation */
-static void codes_exec_mpi_recv(
-        nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp, struct codes_workload_op * mpi_op);
-/* reverse of mpi recv function. */
-static void codes_exec_mpi_recv_rc(
-        nw_state* s, tw_bf * bf, nw_message* m, tw_lp* lp);
-/* execute the computational delay */
-static void codes_exec_comp_delay(
-        nw_state* s, tw_bf *bf, nw_message * m, tw_lp* lp, struct codes_workload_op * mpi_op);
-/* gets the next MPI operation from the network-workloads API. */
-static void get_next_mpi_operation(
-        nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp);
-/* reverse handler of get next mpi operation. */
-static void get_next_mpi_operation_rc(
-        nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp);
-/* Makes a call to get_next_mpi_operation. */
+static void send_ack_back(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, mpi_msg_queue* mpi_op, int matched_req);
+static void send_ack_back_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
+static void codes_exec_mpi_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op, int is_rend);
+static void codes_exec_mpi_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op);
+static void codes_exec_mpi_recv_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
+static void codes_exec_comp_delay(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op);
+static void get_next_mpi_operation(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
+static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void issue_next_event(tw_lp* lp);
-/* reverse handler of next operation */
 static void issue_next_event_rc(tw_lp* lp);
 
 
@@ -1793,89 +1778,45 @@ void nw_test_event_handler(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
   }
 }
 
-static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
+void nw_test_event_handler_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
 {
-  codes_workload_get_next_rc(wrkld_id, s->app_id, s->local_rank, m->mpi_op);
-
-  if (m->op_type == CODES_WK_END) {
-    s->is_finished = 0;
-    return;
-  }
-
-  switch (m->op_type) {
-    case CODES_WK_SEND:
-    case CODES_WK_ISEND:
+  switch (m->msg_type) {
+    case MPI_SEND_ARRIVED:
+      update_arrival_queue_rc(s, bf, m, lp);
+      break;
+    case MPI_SEND_ARRIVED_CB:
+      update_message_time_rc(s, bf, m, lp);
+      break;
+    case MPI_SEND_POSTED:
+      {
+        if (bf->c29)
+          issue_next_event_rc(lp);
+        if (bf->c28)
+          update_completed_queue_rc(s, bf, m, lp);
+      }
+      break;
+    case MPI_REND_ACK_ARRIVED:
       {
         codes_exec_mpi_send_rc(s, bf, m, lp);
       }
       break;
-    case CODES_WK_IRECV:
-    case CODES_WK_RECV:
+    case MPI_REND_ARRIVED:
       {
-        codes_exec_mpi_recv_rc(s, bf, m, lp);
-        s->num_recvs--;
-        s->ross_sample.num_recvs--;
-      }
-      break;
-    case CODES_WK_DELAY:
-      {
-        s->num_delays--;
-        if (disable_compute)
+        codes_local_latency_reverse(lp);
+
+        if (bf->c10)
           issue_next_event_rc(lp);
-        else {
-          if (bf->c28)
-            tw_rand_reverse_unif(lp->rng);
-          s->compute_time = m->rc.saved_delay;
-          s->ross_sample.compute_time = m->rc.saved_delay_sample;
-        }
+
+        if (bf->c8)
+          update_completed_queue_rc(s, bf, m, lp);
+
+        s->recv_time = m->rc.saved_recv_time;
+        s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
       }
       break;
-    case CODES_WK_ALLREDUCE:
-      {
-        if (bf->c27) {
-          s->num_all_reduce--;
-          s->col_time = m->rc.saved_send_time;
-          s->all_reduce_time = m->rc.saved_delay;
-        }
-        else {
-          s->col_time = 0;
-        }
-        issue_next_event_rc(lp);
-      }
+    case MPI_OP_GET_NEXT:
+      get_next_mpi_operation_rc(s, bf, m, lp);
       break;
-    case CODES_WK_BCAST:
-    case CODES_WK_ALLGATHER:
-    case CODES_WK_ALLGATHERV:
-    case CODES_WK_ALLTOALL:
-    case CODES_WK_ALLTOALLV:
-    case CODES_WK_REDUCE:
-    case CODES_WK_COL:
-      {
-        s->num_cols--;
-        issue_next_event_rc(lp);
-      }
-      break;
-    case CODES_WK_WAITSOME:
-    case CODES_WK_WAITANY:
-      {
-        s->num_waitsome--;
-        issue_next_event_rc(lp);
-      }
-      break;
-    case CODES_WK_WAIT:
-      {
-        s->num_wait--;
-        codes_exec_mpi_wait_rc(s, bf, lp, m);
-      }
-      break;
-    case CODES_WK_WAITALL:
-      {
-        s->num_waitall--;
-        codes_exec_mpi_wait_all_rc(s, bf, m, lp);
-      }
-      break;
-    default:
-      printf("Invalid op type %d\n", m->op_type);
   }
 }
 
@@ -1977,6 +1918,92 @@ static void get_next_mpi_operation(nw_state* s, tw_bf* bf, nw_message* m, tw_lp*
       printf("Invalid op type %d\n", mpi_op->op_type);
   }
   return;
+}
+
+static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
+{
+  codes_workload_get_next_rc(wrkld_id, s->app_id, s->local_rank, m->mpi_op);
+
+  if (m->op_type == CODES_WK_END) {
+    s->is_finished = 0;
+    return;
+  }
+
+  switch (m->op_type) {
+    case CODES_WK_SEND:
+    case CODES_WK_ISEND:
+      {
+        codes_exec_mpi_send_rc(s, bf, m, lp);
+      }
+      break;
+    case CODES_WK_IRECV:
+    case CODES_WK_RECV:
+      {
+        codes_exec_mpi_recv_rc(s, bf, m, lp);
+        s->num_recvs--;
+        s->ross_sample.num_recvs--;
+      }
+      break;
+    case CODES_WK_DELAY:
+      {
+        s->num_delays--;
+        if (disable_compute)
+          issue_next_event_rc(lp);
+        else {
+          if (bf->c28)
+            tw_rand_reverse_unif(lp->rng);
+          s->compute_time = m->rc.saved_delay;
+          s->ross_sample.compute_time = m->rc.saved_delay_sample;
+        }
+      }
+      break;
+    case CODES_WK_ALLREDUCE:
+      {
+        if (bf->c27) {
+          s->num_all_reduce--;
+          s->col_time = m->rc.saved_send_time;
+          s->all_reduce_time = m->rc.saved_delay;
+        }
+        else {
+          s->col_time = 0;
+        }
+        issue_next_event_rc(lp);
+      }
+      break;
+    case CODES_WK_BCAST:
+    case CODES_WK_ALLGATHER:
+    case CODES_WK_ALLGATHERV:
+    case CODES_WK_ALLTOALL:
+    case CODES_WK_ALLTOALLV:
+    case CODES_WK_REDUCE:
+    case CODES_WK_COL:
+      {
+        s->num_cols--;
+        issue_next_event_rc(lp);
+      }
+      break;
+    case CODES_WK_WAITSOME:
+    case CODES_WK_WAITANY:
+      {
+        s->num_waitsome--;
+        issue_next_event_rc(lp);
+      }
+      break;
+    case CODES_WK_WAIT:
+      {
+        s->num_wait--;
+        codes_exec_mpi_wait_rc(s, bf, lp, m);
+      }
+      break;
+    case CODES_WK_WAITALL:
+      {
+        s->num_waitall--;
+        codes_exec_mpi_wait_all_rc(s, bf, m, lp);
+      }
+      break;
+    default:
+      printf("Invalid op type %d\n", m->op_type);
+  }
 }
 
 void nw_test_finalize(nw_state* s, tw_lp* lp)
@@ -2089,53 +2116,6 @@ void nw_test_finalize(nw_state* s, tw_lp* lp)
 	    rc_stack_destroy(s->processed_wait_op);
 }
 
-void nw_test_event_handler_rc(nw_state* s, tw_bf * bf, nw_message * m, tw_lp * lp)
-{
-	switch(m->msg_type)
-	{
-		case MPI_SEND_ARRIVED:
-			update_arrival_queue_rc(s, bf, m, lp);
-		break;
-
-		case MPI_SEND_ARRIVED_CB:
-			update_message_time_rc(s, bf, m, lp);
-		break;
-
-        case MPI_SEND_POSTED:
-        {
-         if(bf->c29)
-             issue_next_event_rc(lp);
-         if(bf->c28)
-            update_completed_queue_rc(s, bf, m, lp);
-        }
-        break;
-
-        case MPI_REND_ACK_ARRIVED:
-        {
-            codes_exec_mpi_send_rc(s, bf, m, lp);
-        }
-        break;
-
-        case MPI_REND_ARRIVED:
-        {
-            codes_local_latency_reverse(lp);
-
-            if(bf->c10)
-                issue_next_event_rc(lp);
-
-            if(bf->c8)
-                update_completed_queue_rc(s, bf, m, lp);
-            
-            s->recv_time = m->rc.saved_recv_time;
-            s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
-        }
-        break;
-
-        case MPI_OP_GET_NEXT:
-			get_next_mpi_operation_rc(s, bf, m, lp);
-		break;
-	}
-}
 
 const tw_optdef app_opt [] =
 {
