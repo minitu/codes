@@ -2141,19 +2141,19 @@ const tw_optdef app_opt [] =
 };
 
 tw_lptype nw_lp = {
-    (init_f) nw_test_init,
-    (pre_run_f) NULL,
-    (event_f) nw_test_event_handler,
-    (revent_f) nw_test_event_handler_rc,
-    (commit_f) NULL,
-    (final_f) nw_test_finalize,
-    (map_f) codes_mapping,
-    sizeof(nw_state)
+  (init_f) nw_test_init,
+  (pre_run_f) NULL,
+  (event_f) nw_test_event_handler,
+  (revent_f) nw_test_event_handler_rc,
+  (commit_f) NULL,
+  (final_f) nw_test_finalize,
+  (map_f) codes_mapping,
+  sizeof(nw_state)
 };
 
 const tw_lptype* nw_get_lp_type()
 {
-            return(&nw_lp);
+  return (&nw_lp);
 }
 
 static void nw_add_lp_type()
@@ -2161,71 +2161,66 @@ static void nw_add_lp_type()
   lp_type_register("nw-lp", nw_get_lp_type());
 }
 
-/* setup for the ROSS event tracing
- */
-void nw_lp_event_collect(nw_message *m, tw_lp *lp, char *buffer, int *collect_flag)
+/* Setup for ROSS event tracing */
+void nw_lp_event_collect(nw_message* m, tw_lp* lp, char* buffer, int* collect_flag)
 {
-    (void)lp;
-    (void)collect_flag;
+  (void)lp;
+  (void)collect_flag;
 
-    int type = m->msg_type;
-    memcpy(buffer, &type, sizeof(type));
+  int type = m->msg_type;
+  memcpy(buffer, &type, sizeof(type));
 }
 
-/* can add in any model level data to be collected along with simulation engine data
- * in the ROSS instrumentation.  Will need to update the last field in 
- * nw_lp_model_types[0] for the size of the data to save in each function call
- */
-void nw_lp_model_stat_collect(nw_state *s, tw_lp *lp, char *buffer)
+// Any model level data can be added for collection along with simulation data
+// inside ROSS. Last field in nw_lp_model_types[0] will need to be updated
+// for the size of the data to save in each function call.
+void nw_lp_model_stat_collect(nw_state* s, tw_lp* lp, char* buffer)
 {
-    (void)s;
-    (void)lp;
-    (void)buffer;
-
-    return;
+  (void)s;
+  (void)lp;
+  (void)buffer;
 }
 
-void ross_nw_lp_sample_fn(nw_state * s, tw_bf * bf, tw_lp * lp, struct ross_model_sample *sample)
+void ross_nw_lp_sample_fn(nw_state* s, tw_bf* bf, tw_lp* lp, struct ross_model_sample* sample)
 {
-    memcpy(sample, &s->ross_sample, sizeof(s->ross_sample));
-    sample->nw_id = s->nw_id;
-    sample->app_id = s->app_id;
-    sample->local_rank = s->local_rank;
-    sample->comm_time = s->elapsed_time - s->compute_time;
-    if (alloc_spec == 1)
-    {
-        struct codes_jobmap_id lid;
-        lid = codes_jobmap_to_local_id(s->nw_id, jobmap_ctx);
-    }
-    memset(&s->ross_sample, 0, sizeof(s->ross_sample));
+  memcpy(sample, &s->ross_sample, sizeof(s->ross_sample));
+  sample->nw_id = s->nw_id;
+  sample->app_id = s->app_id;
+  sample->local_rank = s->local_rank;
+  sample->comm_time = s->elapsed_time - s->compute_time;
+  if (alloc_spec == 1) {
+    struct codes_jobmap_id lid;
+    lid = codes_jobmap_to_local_id(s->nw_id, jobmap_ctx);
+  }
+  memset(&s->ross_sample, 0, sizeof(s->ross_sample));
 }
 
-void ross_nw_lp_sample_rc_fn(nw_state * s, tw_bf * bf, tw_lp * lp, struct ross_model_sample *sample)
+void ross_nw_lp_sample_rc_fn(nw_state* s, tw_bf* bf, tw_lp* lp, struct ross_model_sample* sample)
 {
-    memcpy(&s->ross_sample, sample, sizeof(*sample));
+  memcpy(&s->ross_sample, sample, sizeof(*sample));
 }
 
 st_model_types nw_lp_model_types[] = {
-    {(ev_trace_f) nw_lp_event_collect,
-     sizeof(int),
-     (model_stat_f) nw_lp_model_stat_collect,
-     0,
-     (sample_event_f) ross_nw_lp_sample_fn,
-     (sample_revent_f) ross_nw_lp_sample_rc_fn,
-     sizeof(struct ross_model_sample)},
-    {NULL, 0, NULL, 0, NULL, NULL, 0}
+  {(ev_trace_f) nw_lp_event_collect,
+    sizeof(int),
+    (model_stat_f) nw_lp_model_stat_collect,
+    0,
+    (sample_event_f) ross_nw_lp_sample_fn,
+    (sample_revent_f) ross_nw_lp_sample_rc_fn,
+    sizeof(struct ross_model_sample)},
+  {NULL, 0, NULL, 0, NULL, NULL, 0}
 };
 
-static const st_model_types  *nw_lp_get_model_stat_types(void)
+static const st_model_types* nw_lp_get_model_stat_types(void)
 {
-    return(&nw_lp_model_types[0]);
+  return (&nw_lp_model_types[0]);
 }
 
 void nw_lp_register_model()
 {
-    st_model_type_register("nw-lp", nw_lp_get_model_stat_types());
+  st_model_type_register("nw-lp", nw_lp_get_model_stat_types());
 }
-/* end of ROSS event tracing setup */
+/* End of ROSS event tracing setup */
 
 static int msg_size_hash_compare(
             void *key, struct qhash_head *link)
