@@ -57,7 +57,6 @@ int nprocs = 0;
 static double total_syn_data = 0;
 static int unmatched = 0;
 char workload_type[128];
-char workload_name[128];
 char workload_file[8192];
 char offset_file[8192];
 static int wrkld_id;
@@ -81,7 +80,6 @@ static unsigned int lp_io_use_suffix = 0;
 static int do_lp_io = 0;
 
 // Variables for loading multiple applications
-char workload_conf_file[8192];
 char alloc_file[8192];
 int num_traces_of_job[5];
 char file_name_of_job[5][8192];
@@ -2123,23 +2121,6 @@ void nw_test_init(nw_state* s, tw_lp* lp)
     strcpy(params_d.cortex_gen, cortex_gen);
 #endif
   }
-  else if(strcmp(workload_type, "online") == 0) {
-    // Online
-    online_comm_params oc_params;
-    if (strlen(workload_name) > 0) {
-      strcpy(oc_params.workload_name, workload_name);
-    }
-    else if (strlen(workload_conf_file) > 0) {
-      strcpy(oc_params.workload_name, file_name_of_job[lid.job]);
-    }
-
-    //assert(strcmp(oc_params.workload_name, "lammps") == 0 || strcmp(oc_params.workload_name, "nekbone") == 0);
-    // TODO: nprocs is different between DUMPI and online workload.
-    // For online, it is the number of ranks to be simulated.
-    oc_params.nprocs = num_traces_of_job[lid.job];
-    params = (char*)&oc_params;
-    strcpy(type_name, "online_comm_workload");
-  }
 
   // Initialize queues
   INIT_QLIST_HEAD(&s->arrival_queue);
@@ -2549,16 +2530,12 @@ void nw_test_finalize(nw_state* s, tw_lp* lp)
             return;
         if(strncmp(file_name_of_job[lid.job], "synthetic", 9) == 0)
             avg_msg_time = (s->send_time / s->num_recvs);
-        else if(strcmp(workload_type, "online") == 0) 
-        codes_workload_finalize("online_comm_workload", params, s->app_id, s->local_rank);
     }
     else
     {
         if(s->nw_id >= (tw_lpid)num_net_traces)
             return;
         
-        if(strcmp(workload_type, "online") == 0) 
-            codes_workload_finalize("online_comm_workload", params, s->app_id, s->local_rank);
     }
 
         struct msg_size_info * tmp_msg = NULL; 
@@ -2714,10 +2691,8 @@ const tw_optdef app_opt [] =
 {
   TWOPT_GROUP("Network workload test"),
   TWOPT_CHAR("workload_type", workload_type, "dumpi"),
-  TWOPT_CHAR("workload_name", workload_name, "lammps or nekbone (for online workload generation)"),
   TWOPT_CHAR("workload_file", workload_file, "workload file name"),
   TWOPT_CHAR("alloc_file", alloc_file, "allocation file name"),
-  TWOPT_CHAR("workload_conf_file", workload_conf_file, "workload config file name"),
   TWOPT_UINT("num_net_traces", num_net_traces, "number of network traces"),
   TWOPT_UINT("priority_type", priority_type, "priority type (zero): high priority to foreground traffic and low to background/2nd job, (one): high priority to collective operations"),
   TWOPT_ULONGLONG("max_gen_data", max_gen_data, "maximum data to be generated for synthetic traffic"),
@@ -2877,18 +2852,18 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
 
   codes_comm_update();
 
-  if (strcmp(workload_type, "dumpi") != 0 && strcmp(workload_type, "online") != 0) {
+  // Currently only DUMPI is supported as the workload
+  if (strcmp(workload_type, "dumpi") != 0) {
 	  if (tw_ismaster()) {
       printf("Usage: mpirun -np n ./modelnet-mpi-replay --sync=1/3"
-             " --workload_type=dumpi/online"
-             " --workload_conf_file=prefix-workload-file-name"
+             " --workload_type=dumpi"
              " --alloc_file=alloc-file-name"
 #ifdef ENABLE_CORTEX_PYTHON
              " --cortex-file=cortex-file-name"
              " --cortex-class=cortex-class-name"
              " --cortex-gen=cortex-function-name"
 #endif
-             " -- config-file-name\n"
+             " -- network-config-file\n"
              "See model-net/doc/README.dragonfly.txt and model-net/doc/README.torus.txt"
              " for instructions on how to run the models with network traces\n");
     }
@@ -2897,48 +2872,16 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
   }
 
   // Set up workload traces
-  if (strlen(workload_conf_file) > 0) {
-    FILE *name_file = fopen(workload_conf_file, "r");
-    if (!name_file)
-      tw_error(TW_LOC, "Could not open file %s\n", workload_conf_file);
-
-    int i = 0;
-    char ref = '\n';
-    while (!feof(name_file)) {
-      ref = fscanf(name_file, "%d %s", &num_traces_of_job[i], file_name_of_job[i]);
-
-      if (ref != EOF && strncmp(file_name_of_job[i], "synthetic", 9) == 0) {
-        num_syn_clients = num_traces_of_job[i];
-        num_net_traces += num_traces_of_job[i];
-      }
-      else if (ref != EOF) {
-        if (enable_debug)
-          printf("%d traces of app %s\n", num_traces_of_job[i], file_name_of_job[i]);
-
-        num_net_traces += num_traces_of_job[i];
-        num_dumpi_traces += num_traces_of_job[i];
-      }
-      i++;
-    }
-    printf("num_net_traces: %d\n", num_net_traces);
-    fclose(name_file);
-    assert(strlen(alloc_file) != 0);
+  num_traces_of_job[0] = num_net_traces;
+  if (strcmp(workload_type, "dumpi") == 0) {
+    assert(strlen(workload_file) > 0);
+    strcpy(file_name_of_job[0], workload_file);
+  }
+  alloc_spec = 0;
+  if (strlen(alloc_file) > 0) {
     alloc_spec = 1;
     jobmap_p.alloc_file = alloc_file;
     jobmap_ctx = codes_jobmap_configure(CODES_JOBMAP_LIST, &jobmap_p);
-  }
-  else {
-    num_traces_of_job[0] = num_net_traces;
-    if (strcmp(workload_type, "dumpi") == 0) {
-      assert(strlen(workload_file) > 0);
-      strcpy(file_name_of_job[0], workload_file);
-    }
-    alloc_spec = 0;
-    if (strlen(alloc_file) > 0) {
-      alloc_spec = 1;
-      jobmap_p.alloc_file = alloc_file;
-      jobmap_ctx = codes_jobmap_configure(CODES_JOBMAP_LIST, &jobmap_p);
-    }
   }
 
   // Number of traces should be larger than 0 at this point
