@@ -34,7 +34,7 @@
 // NOTE: Message tracking currently only works in sequential mode.
 // Reverse computation has not been implemented.
 static int enable_msg_tracking = 1;
-static int msg_size_hash_compare(void *key, struct qhash_head *link);
+static int msg_size_hash_compare(void* key, struct qhash_head* link);
 
 /* NOTE: Message tracking works in sequential mode only! */
 static int debug_cols = 0;
@@ -2222,29 +2222,29 @@ void nw_lp_register_model()
 }
 /* End of ROSS event tracing setup */
 
-static int msg_size_hash_compare(
-            void *key, struct qhash_head *link)
+// Function for comparing two hash values
+static int msg_size_hash_compare(void* key, struct qhash_head* link)
 {
-   int64_t *in_size = (int64_t *)key;
-   struct msg_size_info *tmp;
+  int64_t* in_size = (int64_t*)key;
+  struct msg_size_info* tmp;
 
-    tmp = qhash_entry(link, struct msg_size_info, hash_link);
-    if (tmp->msg_size == *in_size)
-      return 1;
+  tmp = qhash_entry(link, struct msg_size_info, hash_link);
+  if (tmp->msg_size == *in_size)
+    return 1;
 
-    return 0;
+  return 0;
 }
 
-/* Method to organize all mpi_replay specific configuration parameters
-to be specified in the loaded .conf file*/
+// Read configuration file
 void modelnet_mpi_replay_read_config()
 {
   // Load the factor by which the compute time is sped up by.
   // e.g. If compute_time_speedup = 2, all compute time delay is halved.
-  int rc = configuration_get_value_double(&config, "PARAMS", "compute_time_speedup", NULL, &compute_time_speedup);
-  rc = configuration_get_value_double(&config, "PARAMS", "self_msg_overhead", NULL, &self_overhead);
+  configuration_get_value_double(&config, "PARAMS", "compute_time_speedup", NULL, &compute_time_speedup);
+  configuration_get_value_double(&config, "PARAMS", "self_msg_overhead", NULL, &self_overhead);
 }
 
+// Main
 int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
 {
   // Set up MPI communicator
