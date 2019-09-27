@@ -350,16 +350,9 @@ static tw_stime ns_to_s(tw_stime ns)
 
 // Update information on this message size.
 // Only called when message tracking is enabled.
-static void update_message_size(
-    struct nw_state * ns,
-    tw_lp * lp,
-    tw_bf * bf,
-    struct nw_message * m,
-    mpi_msg_queue * qitem,
-    int is_eager,
-    int is_send)
+static void update_message_size(struct nw_state* s, tw_lp* lp, tw_bf* bf,
+    struct nw_message* m, mpi_msg_queue* qitem, int is_eager, int is_send)
 {
-  // Unused variables
   (void)bf;
   (void)is_eager;
 
@@ -370,16 +363,16 @@ static void update_message_size(
     msg_init_time = m->fwd.sim_start_time;
 
   // Update hash table
-  struct qhash_head* hash_link = qhash_search(ns->msg_sz_table, &(qitem->num_bytes));
+  struct qhash_head* hash_link = qhash_search(s->msg_sz_table, &(qitem->num_bytes));
   if (!hash_link) { // Item not found, create entry for this message size
     struct msg_size_info* msg_info = (struct msg_size_info*)malloc(sizeof(struct msg_size_info));
     msg_info->msg_size = qitem->num_bytes;
     msg_info->num_msgs = 1;
     msg_info->agg_latency = tw_now(lp) - msg_init_time;
     msg_info->avg_latency = msg_info->agg_latency;
-    assert(ns->msg_sz_table);
-    qhash_add(ns->msg_sz_table, &(msg_info->msg_size), &(msg_info->hash_link));
-    qlist_add(&msg_info->ql, &ns->msg_sz_list);
+    assert(s->msg_sz_table);
+    qhash_add(s->msg_sz_table, &(msg_info->msg_size), &(msg_info->hash_link));
+    qlist_add(&msg_info->ql, &s->msg_sz_list);
     //printf("\nMsg size %d aggregate latency %f num messages %d", m->fwd.num_bytes, msg_info->agg_latency, msg_info->num_msgs);
   }
   else { // Item found, add current message information to entry
@@ -393,13 +386,10 @@ static void update_message_size(
 
 // TODO: Reverse computation needed to enable message tracking for parallel simulation
 /*
-static void update_message_size_rc(
-    struct nw_state * ns,
-    tw_lp * lp,
-    tw_bf * bf,
-    struct nw_message * m)
+static void update_message_size_rc(struct nw_state* s, tw_lp* lp, tw_bf* bf,
+    struct nw_message* m)
 {
-  (void)ns;
+  (void)s;
   (void)lp;
   (void)bf;
   (void)m;
@@ -734,7 +724,7 @@ static void codes_exec_mpi_wait_all(
   return;
 }
 
-static int remove_matching_send(nw_state * ns,
+static int remove_matching_send(nw_state * s,
         tw_bf * bf,
         nw_message * m,
         tw_lp * lp, mpi_msg_queue * qitem)
@@ -744,7 +734,7 @@ static int remove_matching_send(nw_state * ns,
     mpi_msg_queue * qi = NULL;
 
     int index = 0;
-    qlist_for_each(ent, &ns->arrival_queue){
+    qlist_for_each(ent, &s->arrival_queue){
         qi = qlist_entry(ent, mpi_msg_queue, ql);
         if(//(qi->num_bytes == qitem->num_bytes) // it is not a requirement in MPI that the send and receive sizes match
                 // && 
@@ -761,7 +751,7 @@ static int remove_matching_send(nw_state * ns,
     if(matched)
     {
         if(enable_msg_tracking && (qi->num_bytes < EAGER_THRESHOLD))
-            update_message_size(ns, lp, bf, m, qi, 1, 0);
+            update_message_size(s, lp, bf, m, qi, 1, 0);
         
         m->fwd.matched_req = qitem->req_id;
         int is_rend = 0;
@@ -771,18 +761,18 @@ static int remove_matching_send(nw_state * ns,
              * the data */
             bf->c10 = 1;
             is_rend = 1;
-            send_ack_back(ns, bf, m, lp, qi, qitem->req_id);
+            send_ack_back(s, bf, m, lp, qi, qitem->req_id);
         }
 
-        m->rc.saved_recv_time = ns->recv_time;
-        m->rc.saved_recv_time_sample = ns->ross_sample.recv_time;
-        ns->recv_time += (tw_now(lp) - qitem->req_init_time);
-        ns->ross_sample.recv_time += (tw_now(lp) - qitem->req_init_time);
+        m->rc.saved_recv_time = s->recv_time;
+        m->rc.saved_recv_time_sample = s->ross_sample.recv_time;
+        s->recv_time += (tw_now(lp) - qitem->req_init_time);
+        s->ross_sample.recv_time += (tw_now(lp) - qitem->req_init_time);
 
         if(qitem->op_type == CODES_WK_IRECV && !is_rend)
         {
             bf->c29 = 1;
-            update_completed_queue(ns, bf, m, lp, qitem->req_id);
+            update_completed_queue(s, bf, m, lp, qitem->req_id);
         }
         else
          if(qitem->op_type == CODES_WK_RECV && !is_rend)
@@ -794,7 +784,7 @@ static int remove_matching_send(nw_state * ns,
 
         qlist_del(&qi->ql);
 
-	    rc_stack_push(lp, qi, free, ns->rc_processed_ops);
+	    rc_stack_push(lp, qi, free, s->rc_processed_ops);
         return index;
     }
     return -1;
@@ -849,13 +839,13 @@ static void codes_exec_comp_delay(
 
 /* reverse computation operation for MPI irecv */
 static void codes_exec_mpi_recv_rc(
-        nw_state* ns,
+        nw_state* s,
         tw_bf * bf,
         nw_message* m,
         tw_lp* lp)
 {
-	ns->recv_time = m->rc.saved_recv_time;
-	ns->ross_sample.recv_time = m->rc.saved_recv_time_sample;
+	s->recv_time = m->rc.saved_recv_time;
+	s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
 
     if(bf->c11)
         issue_next_event_rc(lp);
@@ -864,23 +854,23 @@ static void codes_exec_mpi_recv_rc(
         issue_next_event_rc(lp);
 	if(m->fwd.found_match >= 0)
 	  {
-		ns->recv_time = m->rc.saved_recv_time;
-		ns->ross_sample.recv_time = m->rc.saved_recv_time_sample;
-        //int queue_count = qlist_count(&ns->arrival_queue);
+		s->recv_time = m->rc.saved_recv_time;
+		s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
+        //int queue_count = qlist_count(&s->arrival_queue);
 
-        mpi_msg_queue * qi = (mpi_msg_queue*)rc_stack_pop(ns->rc_processed_ops);
+        mpi_msg_queue * qi = (mpi_msg_queue*)rc_stack_pop(s->rc_processed_ops);
 
         if(bf->c10)
-            send_ack_back_rc(ns, bf, m, lp);
+            send_ack_back_rc(s, bf, m, lp);
         if(m->fwd.found_match == 0)
         {
-            qlist_add(&qi->ql, &ns->arrival_queue);
+            qlist_add(&qi->ql, &s->arrival_queue);
         }
         else 
         {
             int index = 1;
             struct qlist_head * ent = NULL;
-            qlist_for_each(ent, &ns->arrival_queue)
+            qlist_for_each(ent, &s->arrival_queue)
             {
                if(index == m->fwd.found_match)
                {
@@ -892,12 +882,12 @@ static void codes_exec_mpi_recv_rc(
         }
         if(bf->c29)
         {
-            update_completed_queue_rc(ns, bf, m, lp);
+            update_completed_queue_rc(s, bf, m, lp);
         }
       }
 	else if(m->fwd.found_match < 0)
 	    {
-            struct qlist_head * ent = qlist_pop_back(&ns->pending_recvs_queue);
+            struct qlist_head * ent = qlist_pop_back(&s->pending_recvs_queue);
             mpi_msg_queue * qi = qlist_entry(ent, mpi_msg_queue, ql);
             free(qi);
 	    }
@@ -1269,7 +1259,7 @@ static void send_ack_back_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
 // Search for a matching MPI receive operation and remove it from the list.
 // The index of the removed element in the list is recorded, which is used for
 // inserting it again during reverse computation.
-static int remove_matching_recv(nw_state* ns, tw_bf* bf, nw_message* m, tw_lp* lp,
+static int remove_matching_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
     mpi_msg_queue* qitem)
 {
   int matched = 0;
@@ -1279,7 +1269,7 @@ static int remove_matching_recv(nw_state* ns, tw_bf* bf, nw_message* m, tw_lp* l
   mpi_msg_queue* qi = NULL;
 
   // Search the queue for a match
-  qlist_for_each(ent, &ns->pending_recvs_queue) {
+  qlist_for_each(ent, &s->pending_recvs_queue) {
     qi = qlist_entry(ent, mpi_msg_queue, ql);
     // XXX: Should the message size also match?
     if (((qi->tag == qitem->tag) || qi->tag == -1)
@@ -1295,13 +1285,13 @@ static int remove_matching_recv(nw_state* ns, tw_bf* bf, nw_message* m, tw_lp* l
     if (qitem->num_bytes < EAGER_THRESHOLD) {
       // Eager message, store message information
       if (enable_msg_tracking)
-        update_message_size(ns, lp, bf, m, qitem, 1, 1);
+        update_message_size(s, lp, bf, m, qitem, 1, 1);
 
       bf->c12 = 1;
-      m->rc.saved_recv_time = ns->recv_time;
-      m->rc.saved_recv_time_sample = ns->ross_sample.recv_time;
-      ns->recv_time += (tw_now(lp) - m->fwd.sim_start_time);
-      ns->ross_sample.recv_time += (tw_now(lp) - m->fwd.sim_start_time);
+      m->rc.saved_recv_time = s->recv_time;
+      m->rc.saved_recv_time_sample = s->ross_sample.recv_time;
+      s->recv_time += (tw_now(lp) - m->fwd.sim_start_time);
+      s->ross_sample.recv_time += (tw_now(lp) - m->fwd.sim_start_time);
     }
     else {
       // Matching receive found for rendezvous control message.
@@ -1309,13 +1299,13 @@ static int remove_matching_recv(nw_state* ns, tw_bf* bf, nw_message* m, tw_lp* l
       // XXX: Only works in sequential mode?
       bf->c10 = 1;
       is_rend = 1;
-      send_ack_back(ns, bf, m, lp, qitem, qi->req_id);
+      send_ack_back(s, bf, m, lp, qitem, qi->req_id);
     }
 
     if (qi->op_type == CODES_WK_IRECV && !is_rend) {
       // Irecv complete, update queue
       bf->c9 = 1;
-      update_completed_queue(ns, bf, m, lp, qi->req_id);
+      update_completed_queue(s, bf, m, lp, qi->req_id);
     }
     else if (qi->op_type == CODES_WK_RECV && !is_rend) {
       // Recv complete, proceed to next operation
@@ -1325,7 +1315,7 @@ static int remove_matching_recv(nw_state* ns, tw_bf* bf, nw_message* m, tw_lp* l
 
     qlist_del(&qi->ql); // Remove element
 
-    rc_stack_push(lp, qi, free, ns->rc_processed_ops);
+    rc_stack_push(lp, qi, free, s->rc_processed_ops);
 
     return index;
   }
