@@ -27,8 +27,6 @@
 #define CONTROL_MSG_SZ 64
 #define MAX_WAIT_REQS 1024
 #define RANK_HASH_TABLE_SZ 2000
-#define lprintf(_fmt, ...) \
-        do {printf(_fmt, __VA_ARGS__);} while (0)
 #define MAX_STATS 65536
 #define COL_TAG 1235
 #define BAR_TAG 1234
@@ -105,7 +103,7 @@ static uint64_t sample_bytes_written = 0;
 unsigned long long num_bytes_sent = 0;
 unsigned long long num_bytes_recvd = 0;
 
-double max_time = 0,  max_comm_time = 0, max_wait_time = 0, max_send_time = 0, max_recv_time = 0;
+double max_time = 0, max_comm_time = 0, max_wait_time = 0, max_send_time = 0, max_recv_time = 0;
 double avg_time = 0, avg_comm_time = 0, avg_wait_time = 0, avg_send_time = 0, avg_recv_time = 0;
 
 /* runtime option for disabling computation time simulation */
@@ -211,7 +209,6 @@ struct ross_model_sample
     double compute_time;
     double comm_time;
     double max_time;
-    double avg_msg_time;
 };
 
 typedef struct mpi_msg_queue mpi_msg_queue;
@@ -422,44 +419,50 @@ static void update_message_size_rc(
 }
 */
 
-// Debugging functions, may generate unused function warning
-/*
-static void print_waiting_reqs(uint32_t* reqs, int count)
+// FIXME: Printing functions may not work properly in parallel mode
+static void print_msgs_queue(struct qlist_head* head, int is_send)
 {
-  lprintf("\n Waiting reqs: %d count", count);
+  if (is_send)
+    printf("\nSend msgs queue:\n");
+  else
+    printf("\nRecv msgs queue:\n");
+
+  struct qlist_head* ent = NULL;
+  mpi_msg_queue* current = NULL;
+  qlist_for_each(ent, head)
+  {
+    current = qlist_entry(ent, mpi_msg_queue, ql);
+    printf("source %d dest %d bytes %"PRId64" tag %d\n", current->source_rank,
+        current->dest_rank, current->num_bytes, current->tag);
+  }
+}
+
+static void print_waiting_reqs(struct pending_waits* wait_op)
+{
+  uint32_t* reqs = wait_op->req_ids;
+  int count = wait_op->count;
+
+  printf("\nWaiting reqs: %d count ", count);
   int i;
-  for(i = 0; i < count; i++ )
-    lprintf(" %d ", reqs[i]);
+  for (i = 0; i < count; i++)
+    printf("%d ", reqs[i]);
+  printf("\n");
 }
-*/
 
-static void print_msgs_queue(struct qlist_head * head, int is_send)
+static void print_completed_queue(tw_lp* lp, struct qlist_head* head)
 {
-    if(is_send)
-        printf("\n Send msgs queue: ");
-    else
-        printf("\n Recv msgs queue: ");
+  printf("\nCompleted queue:\n");
 
-    struct qlist_head * ent = NULL;
-    mpi_msg_queue * current = NULL;
-    qlist_for_each(ent, head)
-       {
-            current = qlist_entry(ent, mpi_msg_queue, ql);
-            //printf(" \n Source %d Dest %d bytes %"PRId64" tag %d ", current->source_rank, current->dest_rank, current->num_bytes, current->tag);
-       }
+  struct qlist_head * ent = NULL;
+  struct completed_requests* current = NULL;
+  tw_output(lp, "\n");
+  qlist_for_each(ent, head)
+  {
+    current = qlist_entry(ent, completed_requests, ql);
+    tw_output(lp, " %llu ", current->req_id);
+  }
 }
-static void print_completed_queue(tw_lp * lp, struct qlist_head * head)
-{
-//    printf("\n Completed queue: ");
-      struct qlist_head * ent = NULL;
-      struct completed_requests* current = NULL;
-      tw_output(lp, "\n");
-      qlist_for_each(ent, head)
-       {
-            current = qlist_entry(ent, completed_requests, ql);
-            tw_output(lp, " %llu ", current->req_id);
-       }
-}
+
 static int clear_completed_reqs(nw_state * s,
         tw_lp * lp,
         unsigned int * reqs, int count)
@@ -2011,114 +2014,106 @@ static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_
 
 void nw_test_finalize(nw_state* s, tw_lp* lp)
 {
-    int written = 0;
-    double avg_msg_time = 0;
-    /*if(s->wait_op)
-    {
-        lprintf("\n Incomplete wait operation Rank %llu ", s->nw_id);
-        print_waiting_reqs(s->wait_op->req_ids, s->wait_op->count);
-        print_completed_queue(&s->completed_reqs);
-    }*/
-    if(alloc_spec == 1)
-    {
-        struct codes_jobmap_id lid;
-        lid = codes_jobmap_to_local_id(s->nw_id, jobmap_ctx);
+  // Check if there are incomplete waits
+  if (s->wait_op) {
+    printf("\nIncomplete wait operation on rank %llu\n", s->nw_id);
+    print_waiting_reqs(s->wait_op);
+    print_completed_queue(lp, &s->completed_reqs);
+  }
 
-        if(lid.job < 0)
-            return;
+  // Early termination if LP is invalid
+  if (alloc_spec == 1) {
+    struct codes_jobmap_id lid;
+    lid = codes_jobmap_to_local_id(s->nw_id, jobmap_ctx);
+
+    if (lid.job < 0)
+      return;
+  }
+  else {
+    if (s->nw_id >= (tw_lpid)num_net_traces)
+      return;
+  }
+
+  // Print message tracking info
+  if (enable_msg_tracking) {
+    if (s->local_rank == 0)
+      fprintf(msg_log_file, "rank msg size num_msgs agg_latency avg_latency\n");
+
+    struct msg_size_info* tmp_msg = NULL;
+    struct qlist_head* ent = NULL;
+    qlist_for_each(ent, &s->msg_sz_list)
+    {
+      tmp_msg = qlist_entry(ent, struct msg_size_info, ql);
+      printf("rank %d msg size %"PRId64" num_msgs %d agg_latency %f avg_latency %f\n",
+          s->local_rank, tmp_msg->msg_size, tmp_msg->num_msgs, tmp_msg->agg_latency, tmp_msg->avg_latency);
+
+      if (s->local_rank == 0) {
+        fprintf(msg_log_file, "%llu %"PRId64" %d %f\n",
+            LLU(s->nw_id), tmp_msg->msg_size, tmp_msg->num_msgs, tmp_msg->avg_latency);
+      }
     }
-    else
-    {
-        if(s->nw_id >= (tw_lpid)num_net_traces)
-            return;
-        
-    }
+  }
 
-        struct msg_size_info * tmp_msg = NULL; 
-        struct qlist_head * ent = NULL;
+  // Check for unmatched MPI operations
+  int count_irecv = qlist_count(&s->pending_recvs_queue);
+  int count_isend = qlist_count(&s->arrival_queue);
+  if (count_irecv > 0 || count_isend > 0) {
+    unmatched = 1;
+    printf("nw-id %lld unmatched irecvs %d unmatched isends %d"
+        "total sends %ld receives %ld collectives %ld delays %ld"
+        "wait alls %ld waits %ld send time %lf wait %lf",
+        s->nw_id, count_irecv, count_isend, s->num_sends, s->num_recvs, s->num_cols,
+        s->num_delays, s->num_waitall, s->num_wait, s->send_time, s->wait_time);
+    print_msgs_queue(&s->pending_recvs_queue, 0);
+    print_msgs_queue(&s->arrival_queue, 1);
+  }
 
-        if(s->local_rank == 0 && enable_msg_tracking)
-            fprintf(msg_log_file, "\n rank_id message_size num_messages avg_latency");
-        
-        if(enable_msg_tracking)
-        {
-            qlist_for_each(ent, &s->msg_sz_list)
-            {
-                tmp_msg = qlist_entry(ent, struct msg_size_info, ql);
-                printf("\n Rank %d Msg size %"PRId64" num_msgs %d agg_latency %f avg_latency %f",
-                        s->local_rank, tmp_msg->msg_size, tmp_msg->num_msgs, tmp_msg->agg_latency, tmp_msg->avg_latency);
-                //fprintf(msg_log_file, "\n Rank %d Msg size %d num_msgs %d agg_latency %f avg_latency %f",
-                //        s->local_rank, tmp_msg->msg_size, tmp_msg->num_msgs, tmp_msg->agg_latency, tmp_msg->avg_latency);
-                if(s->local_rank == 0)
-                {
-                    fprintf(msg_log_file, "\n %llu %"PRId64" %d %f",
-                        LLU(s->nw_id), tmp_msg->msg_size, tmp_msg->num_msgs, tmp_msg->avg_latency);
-                }
-            }
-        }
-		int count_irecv = 0, count_isend = 0;
-        count_irecv = qlist_count(&s->pending_recvs_queue);
-        count_isend = qlist_count(&s->arrival_queue);
-		if(count_irecv > 0 || count_isend > 0)
-        {
-            unmatched = 1;
-            printf("\n nw-id %lld unmatched irecvs %d unmatched sends %d Total sends %ld receives %ld collectives %ld delays %ld wait alls %ld waits %ld send time %lf wait %lf",
-			    s->nw_id, count_irecv, count_isend, s->num_sends, s->num_recvs, s->num_cols, s->num_delays, s->num_waitall, s->num_wait, s->send_time, s->wait_time);
-        }
-        written = 0;
-    
-        if(!s->nw_id)
-            written = sprintf(s->output_buf, "# Format <LP ID> <Terminal ID> <Job ID> <Local Rank> <Total sends> <Total Recvs> <Bytes sent> <Bytes recvd> <Send time> <Comm. time> <Compute time> <Avg msg time> <Max Msg Time>");
+  // Write replay stats
+  int written = 0;
+  if (!s->nw_id)
+    written = sprintf(s->output_buf, "# Format <LP ID> <Terminal ID> <Job ID> "
+        "<Local Rank> <Total sends> <Total Recvs> <Bytes sent> <Bytes recvd> "
+        "<Send time> <Comm. time> <Compute time> <Max Msg Time>\n");
+  written += sprintf(s->output_buf + written, "%llu %llu %d %d %ld %ld %ld %ld %lf %lf %lf %lf\n",
+      LLU(lp->gid), LLU(s->nw_id), s->app_id, s->local_rank, s->num_sends, s->num_recvs, s->num_bytes_sent,
+      s->num_bytes_recvd, s->send_time, s->elapsed_time - s->compute_time, s->compute_time, s->max_time);
+  lp_io_write(lp->gid, (char*)"mpi-replay-stats", written, s->output_buf);
 
-        written += sprintf(s->output_buf + written, "\n %llu %llu %d %d %ld %ld %ld %ld %lf %lf %lf %lf %lf", LLU(lp->gid), LLU(s->nw_id), s->app_id, s->local_rank, s->num_sends, s->num_recvs, s->num_bytes_sent,
-                s->num_bytes_recvd, s->send_time, s->elapsed_time - s->compute_time, s->compute_time, avg_msg_time, s->max_time);
-        lp_io_write(lp->gid, (char*)"mpi-replay-stats", written, s->output_buf);
+  // Update maximum times
+  if (s->elapsed_time - s->compute_time > max_comm_time)
+    max_comm_time = s->elapsed_time - s->compute_time;
+  if (s->elapsed_time > max_time)
+    max_time = s->elapsed_time;
+  if(s->wait_time > max_wait_time)
+    max_wait_time = s->wait_time;
+  if(s->send_time > max_send_time)
+    max_send_time = s->send_time;
+  if(s->recv_time > max_recv_time)
+    max_recv_time = s->recv_time;
 
-		if(s->elapsed_time - s->compute_time > max_comm_time)
-			max_comm_time = s->elapsed_time - s->compute_time;
+  // Update average times
+  avg_time += s->elapsed_time;
+  avg_comm_time += (s->elapsed_time - s->compute_time);
+  avg_wait_time += s->wait_time;
+  avg_send_time += s->send_time;
+  avg_recv_time += s->recv_time;
 
-		if(s->elapsed_time > max_time )
-			max_time = s->elapsed_time;
+  if (enable_sampling) {
+    fseek(agg_log_file, sample_bytes_written, SEEK_SET);
+    fwrite(s->mpi_wkld_samples, sizeof(struct mpi_workload_sample), s->sampling_indx + 1, agg_log_file);
+    sample_bytes_written += (s->sampling_indx * sizeof(struct mpi_workload_sample));
+  }
 
-        if(count_irecv || count_isend)
-        {
-            print_msgs_queue(&s->pending_recvs_queue, 0);
-            print_msgs_queue(&s->arrival_queue, 1);
-        }
-        if(enable_sampling)
-        {
-            fseek(agg_log_file, sample_bytes_written, SEEK_SET);
-            fwrite(s->mpi_wkld_samples, sizeof(struct mpi_workload_sample), s->sampling_indx + 1, agg_log_file);
-        }
-        sample_bytes_written += (s->sampling_indx * sizeof(struct mpi_workload_sample));
-		if(s->wait_time > max_wait_time)
-			max_wait_time = s->wait_time;
-        
-		if(s->send_time > max_send_time)
-			max_send_time = s->send_time;
+  if (debug_cols) {
+    written = sprintf(s->col_stats, "%llu\t%lf s\n", LLU(s->nw_id), ns_to_s(s->all_reduce_time / s->num_all_reduce));
+    lp_io_write(lp->gid, (char*)"avg-all-reduce-time", written, s->col_stats);
+  }
 
-		if(s->recv_time > max_recv_time)
-			max_recv_time = s->recv_time;
-
-        written = 0;
-
-        if(debug_cols)
-            written += sprintf(s->col_stats + written, "%llu \t %lf \n", LLU(s->nw_id), ns_to_s(s->all_reduce_time / s->num_all_reduce));
-		
-        lp_io_write(lp->gid, (char*)"avg-all-reduce-time", written, s->col_stats);
-
-        avg_time += s->elapsed_time;
-		avg_comm_time += (s->elapsed_time - s->compute_time);
-		avg_wait_time += s->wait_time;
-		avg_send_time += s->send_time;
-		avg_recv_time += s->recv_time;
-
-		//printf("\n LP %ld Time spent in communication %llu ", lp->gid, total_time - s->compute_time);
-	    rc_stack_destroy(s->matched_reqs);
-	    rc_stack_destroy(s->processed_ops);
-	    rc_stack_destroy(s->processed_wait_op);
+  // Destroy RC stacks
+  rc_stack_destroy(s->matched_reqs);
+  rc_stack_destroy(s->processed_ops);
+  rc_stack_destroy(s->processed_wait_op);
 }
-
 
 const tw_optdef app_opt [] =
 {
