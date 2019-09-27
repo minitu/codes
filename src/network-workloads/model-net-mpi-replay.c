@@ -1,6 +1,9 @@
 /*
-* Copyright (C) 2014 University of Chicago.
- * See COPYRIGHT notice in top-level directory.
+ *
+ * NODES - NODe-aware Exascale Simulation
+ * --------------------------------------
+ * Adapted from MPI-replay in CODES
+ * Developed by Jaemin Choi <jaemin@acm.org>
  *
  */
 #include <ross.h>
