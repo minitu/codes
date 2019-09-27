@@ -23,13 +23,12 @@
 #include "codes/quickhash.h"
 #include "codes/codes-jobmap.h"
 
-/* turning on track lp will generate a lot of output messages */
-#define CONTROL_MSG_SZ 64
+#define CONTROL_MSG_SZ 64 // Size of control messages used in rendezvous protocol
 #define MAX_WAIT_REQS 1024
 #define RANK_HASH_TABLE_SZ 2000
 #define MAX_STATS 65536
-#define COL_TAG 1235
-#define BAR_TAG 1234
+#define COL_TAG 1235 // Tag for collectives
+#define BAR_TAG 1234 // Tag for barriers
 
 // NOTE: Message tracking currently only works in sequential mode.
 // Reverse computation has not been implemented.
@@ -41,7 +40,7 @@ static int debug_cols = 0;
 /* Turning on this option slows down optimistic mode substantially. Only turn
  * on if you get issues with wait-all completion with traces. */
 static double compute_time_speedup = 1;
-tw_lpid TRACK_LP = -1;
+tw_lpid TRACK_LP = -1; // Turning this on will generate a lot of output
 int nprocs = 0;
 static int unmatched = 0;
 char workload_type[128];
@@ -277,49 +276,47 @@ struct nw_state
   struct ross_model_sample ross_sample;
 };
 
-/* data for handling reverse computation.
-* saved_matched_req holds the request ID of matched receives/sends for wait operations.
-* ptr_match_op holds the matched MPI operation which are removed from the queues when a send is matched with the receive in forward event handler.
-* network event being sent. op is the MPI operation issued by the network workloads API. rv_data holds the data for reverse computation (TODO: Fill this data structure only when the simulation runs in optimistic mode). */
+// Data structure for handling reverse computation (RC).
+// TODO: Fill this data structure only when the simulation runs in optimistic mode
 struct nw_message
 {
-   // forward message handler
-   int msg_type;
-   int op_type;
-   model_net_event_return event_rc;
-   struct codes_workload_op * mpi_op;
+  int msg_type;
+  int op_type; // Workload type (CODES_WK_*)
+  model_net_event_return event_rc;
+  struct codes_workload_op* mpi_op;
 
-   struct
-   {
-       tw_lpid src_rank;
-       int dest_rank;
-       int64_t num_bytes;
-       int num_matched;
-       int data_type;
-       double sim_start_time;
-       // for callbacks - time message was received
-       double msg_send_time;
-       unsigned int req_id;
-       int matched_req;
-       int tag;
-       int app_id;
-       int found_match;
-       short wait_completed;
-       short rend_send;
-   } fwd;
-   struct
-   {
-       double saved_send_time;
-       double saved_send_time_sample;
-       double saved_recv_time;
-       double saved_recv_time_sample;
-       double saved_wait_time;
-       double saved_wait_time_sample;
-       double saved_delay;
-       double saved_delay_sample;
-       int64_t saved_num_bytes;
-       double saved_prev_max_time;
-   } rc;
+  struct
+  {
+    tw_lpid src_rank;
+    int dest_rank;
+    int64_t num_bytes;
+    int num_matched;
+    int data_type;
+    double sim_start_time;
+    // for callbacks - time message was received
+    double msg_send_time;
+    unsigned int req_id;
+    int matched_req;
+    int tag;
+    int app_id;
+    int found_match;
+    short wait_completed;
+    short rend_send;
+  } fwd;
+
+  struct
+  {
+    double saved_send_time;
+    double saved_send_time_sample;
+    double saved_recv_time;
+    double saved_recv_time_sample;
+    double saved_wait_time;
+    double saved_wait_time_sample;
+    double saved_delay;
+    double saved_delay_sample;
+    int64_t saved_num_bytes;
+    double saved_prev_max_time;
+  } rc;
 };
 
 static void send_ack_back(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, mpi_msg_queue* mpi_op, int matched_req);
@@ -1086,205 +1083,202 @@ int get_global_id_of_job_rank(tw_lpid job_rank, int app_id)
     int global_rank = codes_jobmap_to_global_id(lid, jobmap_ctx);
     return global_rank;
 }
-static void codes_exec_mpi_send_rc(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * lp)
+
+// Executes MPI_Send and MPI_Isend operations
+static void codes_exec_mpi_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
+    struct codes_workload_op* mpi_op, int is_rend)
 {
-        if(enable_sampling)
-        {
-           int indx = s->sampling_indx;
+  bf->c3 = 0;
+  bf->c1 = 0;
+  bf->c4 = 0;
 
-           s->mpi_wkld_samples[indx].num_sends_sample--;
-           s->mpi_wkld_samples[indx].num_bytes_sample -= m->rc.saved_num_bytes;
-
-           if(bf->c1)
-           {
-               s->sampling_indx--;
-               s->cur_interval_end -= sampling_interval;
-           }
-        }
-        if(bf->c15 || bf->c16)
-        {
-            s->num_sends--;
-            s->ross_sample.num_sends--;
-        }
-
-        if (bf->c15)
-            model_net_event_rc2(lp, &m->event_rc);
-        if (bf->c16)
-            model_net_event_rc2(lp, &m->event_rc);
-        if (bf->c17)
-            model_net_event_rc2(lp, &m->event_rc);
-
-        if(bf->c4)
-            issue_next_event_rc(lp);
-
-        if(bf->c3)
-        {
-            s->num_bytes_sent -= m->rc.saved_num_bytes;
-            s->ross_sample.num_bytes_sent -= m->rc.saved_num_bytes;
-            num_bytes_sent -= m->rc.saved_num_bytes;
-        }
-}
-/* executes MPI send and isend operations */
-static void codes_exec_mpi_send(nw_state* s,
-        tw_bf * bf,
-        nw_message * m,
-        tw_lp* lp,
-        struct codes_workload_op * mpi_op,
-        int is_rend)
-{
-    bf->c3 = 0;
-    bf->c1 = 0;
-    bf->c4 = 0;
-   
-    char prio[12];
-    if(priority_type == 0)
-    {
-        if(s->app_id == 0) 
-          strcpy(prio, "high");
-        else
-          strcpy(prio, "medium");
-    }
-    else if(priority_type == 1)
-    {
-        if(mpi_op->u.send.tag == COL_TAG || mpi_op->u.send.tag == BAR_TAG)
-        {
-            strcpy(prio, "high");
-        }
-        else
-            strcpy(prio, "medium");
-    }
+  // Determine priority
+  char prio[12];
+  if (priority_type == 0) {
+    if (s->app_id == 0)
+      strcpy(prio, "high");
     else
-        tw_error(TW_LOC, "\n Invalid priority type %d", priority_type);
+      strcpy(prio, "medium");
+  }
+  else if (priority_type == 1) {
+    if (mpi_op->u.send.tag == COL_TAG || mpi_op->u.send.tag == BAR_TAG)
+      strcpy(prio, "high");
+    else
+      strcpy(prio, "medium");
+  }
+  else
+    tw_error(TW_LOC, "\nInvalid priority type %d\n", priority_type);
 
-    int is_eager = 0;
-	/* model-net event */
-    int global_dest_rank = mpi_op->u.send.dest_rank;
+  // Figure out destination ranks
+  int global_dest_rank = mpi_op->u.send.dest_rank;
+  if (alloc_spec) {
+    global_dest_rank = get_global_id_of_job_rank(mpi_op->u.send.dest_rank, s->app_id);
+  }
 
-    if(alloc_spec)
-    {
-        global_dest_rank = get_global_id_of_job_rank(mpi_op->u.send.dest_rank, s->app_id);
-    }
+  tw_lpid dest_rank = codes_mapping_get_lpid_from_relative(global_dest_rank, NULL, "nw-lp", NULL, 0);
 
-    if(lp->gid == TRACK_LP)
-        printf("\n Sender rank %llu global dest rank %d dest-rank %d bytes %"PRIu64" Tag %d", LLU(s->nw_id), global_dest_rank, mpi_op->u.send.dest_rank, mpi_op->u.send.num_bytes, mpi_op->u.send.tag);
-    m->rc.saved_num_bytes = mpi_op->u.send.num_bytes;
-	/* model-net event */
-	tw_lpid dest_rank = codes_mapping_get_lpid_from_relative(global_dest_rank, NULL, "nw-lp", NULL, 0);
+  if (lp->gid == TRACK_LP)
+    printf("\nSender rank %llu global dest rank %d dest rank %d bytes %"PRIu64" tag %d\n",
+        LLU(s->nw_id), global_dest_rank, mpi_op->u.send.dest_rank,
+        mpi_op->u.send.num_bytes, mpi_op->u.send.tag);
 
-    if(enable_sampling)
-    {
-        if(tw_now(lp) >= s->cur_interval_end)
-        {
-            bf->c1 = 1;
-            int indx = s->sampling_indx;
-            s->mpi_wkld_samples[indx].nw_id = s->nw_id;
-            s->mpi_wkld_samples[indx].app_id = s->app_id;
-            s->mpi_wkld_samples[indx].sample_end_time = s->cur_interval_end;
-            s->sampling_indx++;
-            s->cur_interval_end += sampling_interval;
-        }
-        if(s->sampling_indx >= MAX_STATS)
-        {
-            struct mpi_workload_sample * tmp = (struct mpi_workload_sample*)calloc((MAX_STATS + s->max_arr_size), sizeof(struct mpi_workload_sample));
-            memcpy(tmp, s->mpi_wkld_samples, s->sampling_indx);
-            free(s->mpi_wkld_samples);
-            s->mpi_wkld_samples = tmp;
-            s->max_arr_size += MAX_STATS;
-        }
-        int indx = s->sampling_indx;
-        s->mpi_wkld_samples[indx].num_sends_sample++;
-        s->mpi_wkld_samples[indx].num_bytes_sample += mpi_op->u.send.num_bytes;
-    }
-	nw_message local_m;
-	nw_message remote_m;
+  // Save message size for RC
+  m->rc.saved_num_bytes = mpi_op->u.send.num_bytes;
 
-    local_m.fwd.dest_rank = mpi_op->u.send.dest_rank;
-    local_m.fwd.src_rank = mpi_op->u.send.source_rank;
-    local_m.op_type = mpi_op->op_type;
-    local_m.msg_type = MPI_SEND_POSTED;
-    local_m.fwd.tag = mpi_op->u.send.tag;
-    local_m.fwd.rend_send = 0;
-    local_m.fwd.num_bytes = mpi_op->u.send.num_bytes;
-    local_m.fwd.req_id = mpi_op->u.send.req_id;
-    local_m.fwd.app_id = s->app_id;
-    local_m.fwd.matched_req = m->fwd.matched_req;        
-   
-    if(mpi_op->u.send.num_bytes < EAGER_THRESHOLD)
-    {
-        /* directly issue a model-net send */
-           
-        bf->c15 = 1;
-        is_eager = 1;
-        s->num_sends++;
-        s->ross_sample.num_sends++;
-        tw_stime copy_overhead = copy_per_byte_eager * mpi_op->u.send.num_bytes;
-        local_m.fwd.sim_start_time = tw_now(lp);
+  // Handle sampling
+  if (enable_sampling) {
+    if (tw_now(lp) >= s->cur_interval_end) {
+      bf->c1 = 1;
+      int indx = s->sampling_indx;
+      s->mpi_wkld_samples[indx].nw_id = s->nw_id;
+      s->mpi_wkld_samples[indx].app_id = s->app_id;
+      s->mpi_wkld_samples[indx].sample_end_time = s->cur_interval_end;
+      s->sampling_indx++;
+      s->cur_interval_end += sampling_interval;
+    }
+    if (s->sampling_indx >= MAX_STATS) {
+      struct mpi_workload_sample * tmp = (struct mpi_workload_sample*)calloc(
+          (MAX_STATS + s->max_arr_size), sizeof(struct mpi_workload_sample));
+      memcpy(tmp, s->mpi_wkld_samples, s->sampling_indx);
+      free(s->mpi_wkld_samples);
+      s->mpi_wkld_samples = tmp;
+      s->max_arr_size += MAX_STATS;
+    }
+    int indx = s->sampling_indx;
+    s->mpi_wkld_samples[indx].num_sends_sample++;
+    s->mpi_wkld_samples[indx].num_bytes_sample += mpi_op->u.send.num_bytes;
+  }
 
-        remote_m = local_m;
-        remote_m.msg_type = MPI_SEND_ARRIVED;
-    	m->event_rc = model_net_event_mctx(net_id, &mapping_context, &mapping_context, 
-            prio, dest_rank, mpi_op->u.send.num_bytes, (self_overhead + copy_overhead + soft_delay_mpi + nic_delay),
-	    sizeof(nw_message), (const void*)&remote_m, sizeof(nw_message), (const void*)&local_m, lp);
-    }
-    else if (is_rend == 0)
-    {
-        /* Initiate the handshake. Issue a control message to the destination first. No local message,
-         * only remote message sent. */
-        bf->c16 = 1;
-        s->num_sends++;
-        s->ross_sample.num_sends++;
-        remote_m.fwd.sim_start_time = tw_now(lp);
-        remote_m.fwd.dest_rank = mpi_op->u.send.dest_rank;   
-        remote_m.fwd.src_rank = mpi_op->u.send.source_rank;
-        remote_m.msg_type = MPI_SEND_ARRIVED;
-        remote_m.op_type = mpi_op->op_type;
-        remote_m.fwd.tag = mpi_op->u.send.tag; 
-        remote_m.fwd.num_bytes = mpi_op->u.send.num_bytes;
-        remote_m.fwd.req_id = mpi_op->u.send.req_id;  
-        remote_m.fwd.app_id = s->app_id;
+  nw_message local_m;
+  nw_message remote_m;
 
-    	m->event_rc = model_net_event_mctx(net_id, &mapping_context, &mapping_context, 
-            prio, dest_rank, CONTROL_MSG_SZ, (self_overhead + soft_delay_mpi + nic_delay),
-	    sizeof(nw_message), (const void*)&remote_m, 0, NULL, lp);
+  // Construct local message
+  local_m.msg_type = MPI_SEND_POSTED;
+  local_m.op_type = mpi_op->op_type;
+  local_m.fwd.src_rank = mpi_op->u.send.source_rank;
+  local_m.fwd.dest_rank = mpi_op->u.send.dest_rank;
+  local_m.fwd.num_bytes = mpi_op->u.send.num_bytes;
+  local_m.fwd.req_id = mpi_op->u.send.req_id;
+  local_m.fwd.matched_req = m->fwd.matched_req;
+  local_m.fwd.tag = mpi_op->u.send.tag;
+  local_m.fwd.app_id = s->app_id;
+  local_m.fwd.rend_send = 0;
+
+  int is_eager = 0;
+  if (mpi_op->u.send.num_bytes < EAGER_THRESHOLD) {
+    // Eager message, directly issue a model-net send
+    bf->c15 = 1;
+    is_eager = 1;
+    s->num_sends++;
+    s->ross_sample.num_sends++;
+
+    local_m.fwd.sim_start_time = tw_now(lp);
+    remote_m = local_m;
+    remote_m.msg_type = MPI_SEND_ARRIVED;
+
+    tw_stime copy_overhead = copy_per_byte_eager * mpi_op->u.send.num_bytes;
+
+    // Pass to model-net
+    m->event_rc = model_net_event_mctx(net_id, &mapping_context, &mapping_context,
+        prio, dest_rank, mpi_op->u.send.num_bytes, (self_overhead + copy_overhead + soft_delay_mpi + nic_delay),
+        sizeof(nw_message), (const void*)&remote_m, sizeof(nw_message), (const void*)&local_m, lp);
+  }
+  else if (is_rend == 0) {
+    // Rendezvous message, need to initiate handshake
+    // Issue a control message to the destination, with only remote message
+    bf->c16 = 1;
+    s->num_sends++;
+    s->ross_sample.num_sends++;
+
+    remote_m.msg_type = MPI_SEND_ARRIVED;
+    remote_m.op_type = mpi_op->op_type;
+    remote_m.fwd.src_rank = mpi_op->u.send.source_rank;
+    remote_m.fwd.dest_rank = mpi_op->u.send.dest_rank;
+    remote_m.fwd.num_bytes = mpi_op->u.send.num_bytes;
+    remote_m.fwd.sim_start_time = tw_now(lp);
+    remote_m.fwd.req_id = mpi_op->u.send.req_id;
+    remote_m.fwd.tag = mpi_op->u.send.tag;
+    remote_m.fwd.app_id = s->app_id;
+
+    // Pass control message to model-net
+    m->event_rc = model_net_event_mctx(net_id, &mapping_context, &mapping_context,
+        prio, dest_rank, CONTROL_MSG_SZ, (self_overhead + soft_delay_mpi + nic_delay),
+        sizeof(nw_message), (const void*)&remote_m, 0, NULL, lp);
+  }
+  else if (is_rend == 1) {
+    // Rendezvous message, need to send actual data (ACK received)
+    bf->c17 = 1;
+
+    local_m.fwd.sim_start_time = mpi_op->sim_start_time;
+    local_m.fwd.rend_send = 1;
+    remote_m = local_m;
+    remote_m.msg_type = MPI_REND_ARRIVED;
+
+    // Pass to model-net
+    m->event_rc = model_net_event_mctx(net_id, &mapping_context, &mapping_context,
+        prio, dest_rank, mpi_op->u.send.num_bytes, (self_overhead + soft_delay_mpi + nic_delay),
+        sizeof(nw_message), (const void*)&remote_m, sizeof(nw_message), (const void*)&local_m, lp);
+  }
+
+  // Debugging output (only at initiation for rendezvous messages)
+  if (enable_debug && !is_rend) {
+    if (mpi_op->op_type == CODES_WK_ISEND)
+      fprintf(debug_log_file, "(time: %lf) APP %d MPI ISEND SOURCE %llu DEST %d TAG %d BYTES %"PRId64,
+          tw_now(lp), s->app_id, LLU(s->nw_id), global_dest_rank, mpi_op->u.send.tag, mpi_op->u.send.num_bytes);
+    else
+      fprintf(debug_log_file, "(time: %lf) APP ID %d MPI SEND SOURCE %llu DEST %d TAG %d BYTES %"PRId64,
+          tw_now(lp), s->app_id, LLU(s->nw_id), global_dest_rank, mpi_op->u.send.tag, mpi_op->u.send.num_bytes);
+  }
+
+  // Record message size for sends with actual data
+  if (is_rend || is_eager) {
+    bf->c3 = 1;
+    s->num_bytes_sent += mpi_op->u.send.num_bytes;
+    s->ross_sample.num_bytes_sent += mpi_op->u.send.num_bytes;
+    num_bytes_sent += mpi_op->u.send.num_bytes;
+  }
+
+  // For non-blocking send, get next MPI operation
+  if (mpi_op->op_type == CODES_WK_ISEND && (!is_rend || is_eager)) {
+    bf->c4 = 1;
+    issue_next_event(lp);
+  }
+}
+
+static void codes_exec_mpi_send_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
+{
+  // Handle sampling
+  if (enable_sampling) {
+    int indx = s->sampling_indx;
+    s->mpi_wkld_samples[indx].num_sends_sample--;
+    s->mpi_wkld_samples[indx].num_bytes_sample -= m->rc.saved_num_bytes;
+
+    if (bf->c1) {
+      s->sampling_indx--;
+      s->cur_interval_end -= sampling_interval;
     }
-    else if(is_rend == 1)
-    {
-        bf->c17 = 1;
-        /* initiate the actual data transfer, local completion message is sent
-         * for any blocking sends. */
-       local_m.fwd.sim_start_time = mpi_op->sim_start_time;
-       local_m.fwd.rend_send = 1;
-       remote_m = local_m; 
-       remote_m.msg_type = MPI_REND_ARRIVED;
-    	
-       m->event_rc = model_net_event_mctx(net_id, &mapping_context, &mapping_context, 
-            prio, dest_rank, mpi_op->u.send.num_bytes, (self_overhead + soft_delay_mpi + nic_delay),
-	    sizeof(nw_message), (const void*)&remote_m, sizeof(nw_message), (const void*)&local_m, lp);
-    }
-    if(enable_debug && !is_rend)
-    {
-        if(mpi_op->op_type == CODES_WK_ISEND)
-        {
-            fprintf(debug_log_file, "\n (%lf) APP %d MPI ISEND SOURCE %llu DEST %d TAG %d BYTES %"PRId64,
-                    tw_now(lp), s->app_id, LLU(s->nw_id), global_dest_rank, mpi_op->u.send.tag, mpi_op->u.send.num_bytes);
-        }
-        else
-            fprintf(debug_log_file, "\n (%lf) APP ID %d MPI SEND SOURCE %llu DEST %d TAG %d BYTES %"PRId64,
-                    tw_now(lp), s->app_id, LLU(s->nw_id), global_dest_rank, mpi_op->u.send.tag, mpi_op->u.send.num_bytes);
-    }
-    if(is_rend || is_eager)    
-    {
-       bf->c3 = 1;
-       s->num_bytes_sent += mpi_op->u.send.num_bytes;
-       s->ross_sample.num_bytes_sent += mpi_op->u.send.num_bytes;
-       num_bytes_sent += mpi_op->u.send.num_bytes;
-    }
-	/* isend executed, now get next MPI operation from the queue */
-	if(mpi_op->op_type == CODES_WK_ISEND && (!is_rend || is_eager))
-    {
-       bf->c4 = 1;
-	   issue_next_event(lp);
-    }
+  }
+
+  // Eager or rendezvous control message
+  if (bf->c15 || bf->c16) {
+    s->num_sends--;
+    s->ross_sample.num_sends--;
+  }
+
+  // Reverse model-net events
+  if (bf->c15) model_net_event_rc2(lp, &m->event_rc);
+  if (bf->c16) model_net_event_rc2(lp, &m->event_rc);
+  if (bf->c17) model_net_event_rc2(lp, &m->event_rc);
+
+  // Reverse fetching next MPI operation
+  if (bf->c4) issue_next_event_rc(lp);
+
+  // Reverse message size recording
+  if (bf->c3) {
+    s->num_bytes_sent -= m->rc.saved_num_bytes;
+    s->ross_sample.num_bytes_sent -= m->rc.saved_num_bytes;
+    num_bytes_sent -= m->rc.saved_num_bytes;
+  }
 }
 
 static void update_completed_queue_rc(nw_state * s, tw_bf * bf, nw_message * m, tw_lp * lp)
@@ -1725,8 +1719,6 @@ void nw_test_event_handler(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
     case MPI_REND_ACK_ARRIVED:
       {
         // Reconstruct the op and pass it on for actual data transfer
-        int is_rend = 1;
-
         struct codes_workload_op mpi_op;
         mpi_op.op_type = m->op_type;
         mpi_op.u.send.tag = m->fwd.tag;
@@ -1736,7 +1728,7 @@ void nw_test_event_handler(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
         mpi_op.sim_start_time = m->fwd.sim_start_time;
         mpi_op.u.send.req_id = m->fwd.req_id;
 
-        codes_exec_mpi_send(s, bf, m, lp, &mpi_op, is_rend);
+        codes_exec_mpi_send(s, bf, m, lp, &mpi_op, 1);
       }
       break;
     case MPI_SEND_ARRIVED_CB:
