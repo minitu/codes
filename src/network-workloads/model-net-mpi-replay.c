@@ -1292,10 +1292,6 @@ static int remove_matching_recv(nw_state* ns, tw_bf* bf, nw_message* m, tw_lp* l
   }
 
   if (matched) {
-    // Record message information
-    if (enable_msg_tracking && qitem->num_bytes < EAGER_THRESHOLD)
-      update_message_size(ns, lp, bf, m, qitem, 1, 1);
-
     if (qitem->num_bytes < EAGER_THRESHOLD) {
       // Eager message, store message information
       if (enable_msg_tracking)
