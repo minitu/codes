@@ -128,7 +128,7 @@ enum MPI_NW_EVENTS
 {
   MPI_OP_GET_NEXT=1,
   MPI_SEND_ARRIVED,
-  MPI_SEND_ARRIVED_CB, // for tracking message times on sender
+  MPI_SEND_ARRIVED_CB, // For tracking message times on sender
   MPI_SEND_POSTED,
   MPI_REND_ARRIVED,
   MPI_REND_ACK_ARRIVED,
@@ -250,8 +250,11 @@ struct nw_state
   double recv_time;
   double wait_time;
 
-  struct qlist_head arrival_queue; // FIFO for Isend messages arrived at destination
-  struct qlist_head pending_recvs_queue; // FIFO for posted Irecv messages (not yet matched)
+  // For handling message arrivals & receives (from workload/trace)
+  struct qlist_head arrival_queue; // Messages arrived due to MPI_Send from source
+  struct qlist_head pending_recvs_queue; // Unmatched receives (read from workload)
+
+  // For handling waits
   struct qlist_head completed_reqs; // List of completed send/recv requests
   struct pending_waits* wait_op; // Pending wait operations
 
@@ -318,6 +321,7 @@ struct nw_message
 static void send_ack_back(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, mpi_msg_queue* mpi_op, int matched_req);
 static void send_ack_back_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void codes_exec_mpi_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op, int is_rend);
+static void codes_exec_mpi_send_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void codes_exec_mpi_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op);
 static void codes_exec_mpi_recv_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void codes_exec_comp_delay(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op);
@@ -724,71 +728,68 @@ static void codes_exec_mpi_wait_all(
   return;
 }
 
-static int remove_matching_send(nw_state * s,
-        tw_bf * bf,
-        nw_message * m,
-        tw_lp * lp, mpi_msg_queue * qitem)
+static int remove_matching_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
+    mpi_msg_queue* qitem)
 {
-    int matched = 0;
-    struct qlist_head *ent = NULL;
-    mpi_msg_queue * qi = NULL;
+  int matched = 0;
+  int index = 0;
+  int is_rend = 0;
+  struct qlist_head* ent = NULL;
+  mpi_msg_queue* qi = NULL;
 
-    int index = 0;
-    qlist_for_each(ent, &s->arrival_queue){
-        qi = qlist_entry(ent, mpi_msg_queue, ql);
-        if(//(qi->num_bytes == qitem->num_bytes) // it is not a requirement in MPI that the send and receive sizes match
-                // && 
-		(qi->tag == qitem->tag || qitem->tag == -1)
-                && ((qi->source_rank == qitem->source_rank) || qitem->source_rank == -1))
-        {
-            qitem->num_bytes = qi->num_bytes;
-            matched = 1;
-            break;
-        }
-        ++index;
+  // Search the queue for a match
+  qlist_for_each(ent, &s->arrival_queue) {
+    qi = qlist_entry(ent, mpi_msg_queue, ql);
+    // Send and receive sizes don't have to match in MPI
+    if ((qi->tag == qitem->tag || qitem->tag == -1)
+        && ((qi->source_rank == qitem->source_rank) || qitem->source_rank == -1)) {
+      qitem->num_bytes = qi->num_bytes; // XXX: This is different from remove_matching_recv
+      matched = 1;
+      break;
+    }
+    ++index;
+  }
+
+  if (matched) {
+    if (enable_msg_tracking && (qi->num_bytes < EAGER_THRESHOLD))
+      update_message_size(s, lp, bf, m, qi, 1, 0);
+
+    m->fwd.matched_req = qitem->req_id;
+    if (qitem->num_bytes >= EAGER_THRESHOLD) {
+      // Matching message arrival (send) found.
+      // Need to notify sender to transmit the actual data.
+      bf->c10 = 1;
+      is_rend = 1;
+      send_ack_back(s, bf, m, lp, qi, qitem->req_id);
     }
 
-    if(matched)
-    {
-        if(enable_msg_tracking && (qi->num_bytes < EAGER_THRESHOLD))
-            update_message_size(s, lp, bf, m, qi, 1, 0);
-        
-        m->fwd.matched_req = qitem->req_id;
-        int is_rend = 0;
-        if(qitem->num_bytes >= EAGER_THRESHOLD)
-        {
-            /* Matching receive found, need to notify the sender to transmit
-             * the data */
-            bf->c10 = 1;
-            is_rend = 1;
-            send_ack_back(s, bf, m, lp, qi, qitem->req_id);
-        }
+    // XXX: Why isn't this only set with eager messages like remove_matching_recv?
+    m->rc.saved_recv_time = s->recv_time;
+    m->rc.saved_recv_time_sample = s->ross_sample.recv_time;
+    s->recv_time += (tw_now(lp) - qitem->req_init_time);
+    s->ross_sample.recv_time += (tw_now(lp) - qitem->req_init_time);
 
-        m->rc.saved_recv_time = s->recv_time;
-        m->rc.saved_recv_time_sample = s->ross_sample.recv_time;
-        s->recv_time += (tw_now(lp) - qitem->req_init_time);
-        s->ross_sample.recv_time += (tw_now(lp) - qitem->req_init_time);
-
-        if(qitem->op_type == CODES_WK_IRECV && !is_rend)
-        {
-            bf->c29 = 1;
-            update_completed_queue(s, bf, m, lp, qitem->req_id);
-        }
-        else
-         if(qitem->op_type == CODES_WK_RECV && !is_rend)
-         {
-            bf->c6 = 1;
-            issue_next_event(lp);
-         }
-
-
-        qlist_del(&qi->ql);
-
-	    rc_stack_push(lp, qi, free, s->rc_processed_ops);
-        return index;
+    if (qitem->op_type == CODES_WK_IRECV && !is_rend) {
+      // Irecv complete, update queue
+      bf->c29 = 1;
+      update_completed_queue(s, bf, m, lp, qitem->req_id);
     }
-    return -1;
+    else if (qitem->op_type == CODES_WK_RECV && !is_rend) {
+      // Recv complete, proceed to next operation
+      bf->c6 = 1;
+      issue_next_event(lp);
+    }
+
+    qlist_del(&qi->ql); // Remove matched send (arrival)
+
+    rc_stack_push(lp, qi, free, s->rc_processed_ops);
+
+    return index;
+  }
+
+  return -1;
 }
+
 static void issue_next_event_rc(tw_lp* lp)
 {
   tw_rand_reverse_unif(lp->rng);
@@ -837,110 +838,85 @@ static void codes_exec_comp_delay(
 
 }
 
-/* reverse computation operation for MPI irecv */
-static void codes_exec_mpi_recv_rc(
-        nw_state* s,
-        tw_bf * bf,
-        nw_message* m,
-        tw_lp* lp)
+// Executes MPI_Recv and MPI_Irecv operations
+static void codes_exec_mpi_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
+    struct codes_workload_op* mpi_op)
 {
-	s->recv_time = m->rc.saved_recv_time;
-	s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
+  // Save information for RC
+  m->rc.saved_recv_time = s->recv_time;
+  m->rc.saved_recv_time_sample = s->ross_sample.recv_time;
+  m->rc.saved_num_bytes = mpi_op->u.recv.num_bytes;
 
-    if(bf->c11)
-        issue_next_event_rc(lp);
+  // Create entry for MPI recv operation.
+  // This is used to find if there is a matching (arrived) send;
+  // if not it is stored in pending_recvs_queue for matching later.
+  mpi_msg_queue* recv_op = (mpi_msg_queue*) malloc(sizeof(mpi_msg_queue));
+  recv_op->op_type = mpi_op->op_type;
+  recv_op->tag = mpi_op->u.recv.tag;
+  recv_op->source_rank = mpi_op->u.recv.source_rank;
+  recv_op->dest_rank = mpi_op->u.recv.dest_rank;
+  recv_op->num_bytes = mpi_op->u.recv.num_bytes;
+  recv_op->req_init_time = tw_now(lp);
+  recv_op->req_id = mpi_op->u.recv.req_id;
 
-    if(bf->c6)
-        issue_next_event_rc(lp);
-	if(m->fwd.found_match >= 0)
-	  {
-		s->recv_time = m->rc.saved_recv_time;
-		s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
-        //int queue_count = qlist_count(&s->arrival_queue);
+  int found_matching_send = remove_matching_send(s, bf, m, lp, recv_op);
 
-        mpi_msg_queue * qi = (mpi_msg_queue*)rc_stack_pop(s->rc_processed_ops);
+  if (mpi_op->op_type == CODES_WK_IRECV) {
+    bf->c6 = 1;
+    issue_next_event(lp);
+  }
 
-        if(bf->c10)
-            send_ack_back_rc(s, bf, m, lp);
-        if(m->fwd.found_match == 0)
-        {
-            qlist_add(&qi->ql, &s->arrival_queue);
-        }
-        else 
-        {
-            int index = 1;
-            struct qlist_head * ent = NULL;
-            qlist_for_each(ent, &s->arrival_queue)
-            {
-               if(index == m->fwd.found_match)
-               {
-                 qlist_add(&qi->ql, ent);
-                 break;
-               }
-               index++;
-            }
-        }
-        if(bf->c29)
-        {
-            update_completed_queue_rc(s, bf, m, lp);
-        }
-      }
-	else if(m->fwd.found_match < 0)
-	    {
-            struct qlist_head * ent = qlist_pop_back(&s->pending_recvs_queue);
-            mpi_msg_queue * qi = qlist_entry(ent, mpi_msg_queue, ql);
-            free(qi);
-	    }
+  if (found_matching_send < 0) {
+    m->fwd.found_match = -1;
+    qlist_add_tail(&recv_op->ql, &s->pending_recvs_queue);
+  }
+  else {
+    m->fwd.found_match = found_matching_send; // Record element index for RC
+  }
 }
 
-/* Execute MPI Irecv operation (non-blocking receive) */
-static void codes_exec_mpi_recv(
-        nw_state* s,
-        tw_bf * bf,
-        nw_message * m,
-        tw_lp* lp,
-        struct codes_workload_op * mpi_op)
+static void codes_exec_mpi_recv_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
 {
-/* Once an irecv is posted, list of completed sends is checked to find a matching isend.
-   If no matching isend is found, the receive operation is queued in the pending queue of
-   receive operations. */
+  s->recv_time = m->rc.saved_recv_time;
+  s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
 
-    m->rc.saved_recv_time = s->recv_time;
-    m->rc.saved_recv_time_sample = s->ross_sample.recv_time;
-    m->rc.saved_num_bytes = mpi_op->u.recv.num_bytes;
+  if (bf->c6)
+    issue_next_event_rc(lp);
 
-    mpi_msg_queue * recv_op = (mpi_msg_queue*) malloc(sizeof(mpi_msg_queue));
-    recv_op->req_init_time = tw_now(lp);
-    recv_op->op_type = mpi_op->op_type;
-    recv_op->source_rank = mpi_op->u.recv.source_rank;
-    recv_op->dest_rank = mpi_op->u.recv.dest_rank;
-    recv_op->num_bytes = mpi_op->u.recv.num_bytes;
-    recv_op->tag = mpi_op->u.recv.tag;
-    recv_op->req_id = mpi_op->u.recv.req_id;
+  if (m->fwd.found_match >= 0) {
+    s->recv_time = m->rc.saved_recv_time;
+    s->ross_sample.recv_time = m->rc.saved_recv_time_sample;
 
+    mpi_msg_queue* qi = (mpi_msg_queue*)rc_stack_pop(s->rc_processed_ops);
 
-    //printf("\n Req id %d bytes %d source %d tag %d ", recv_op->req_id, recv_op->num_bytes, recv_op->source_rank, recv_op->tag);
+    if (bf->c10)
+      send_ack_back_rc(s, bf, m, lp);
 
-	int found_matching_sends = remove_matching_send(s, bf, m, lp, recv_op);
-
-	       /* for mpi irecvs, this is a non-blocking receive so just post it and move on with the trace read. */
-	if(mpi_op->op_type == CODES_WK_IRECV)
-    {
-        bf->c6 = 1;
-	    issue_next_event(lp);
+    if (m->fwd.found_match == 0) {
+      qlist_add(&qi->ql, &s->arrival_queue);
     }
-	/* save the req id inserted in the completed queue for reverse computation. */
-	if(found_matching_sends < 0)
-	  {
-	   	  m->fwd.found_match = -1;
-          qlist_add_tail(&recv_op->ql, &s->pending_recvs_queue);
+    else {
+      int index = 1;
+      struct qlist_head* ent = NULL;
+      qlist_for_each(ent, &s->arrival_queue)
+      {
+        if (index == m->fwd.found_match) {
+          qlist_add(&qi->ql, ent);
+          break;
+        }
+        index++;
+      }
+    }
 
-      }
-	else
-	  {
-        //bf->c6 = 1;
-        m->fwd.found_match = found_matching_sends;
-      }
+    if (bf->c29) {
+      update_completed_queue_rc(s, bf, m, lp);
+    }
+  }
+  else if (m->fwd.found_match < 0) {
+    struct qlist_head* ent = qlist_pop_back(&s->pending_recvs_queue);
+    mpi_msg_queue* qi = qlist_entry(ent, mpi_msg_queue, ql);
+    free(qi);
+  }
 }
 
 int get_global_id_of_job_rank(tw_lpid job_rank, int app_id)
@@ -1271,7 +1247,7 @@ static int remove_matching_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
   // Search the queue for a match
   qlist_for_each(ent, &s->pending_recvs_queue) {
     qi = qlist_entry(ent, mpi_msg_queue, ql);
-    // XXX: Should the message size also match?
+    // Send and receive sizes don't have to match in MPI
     if (((qi->tag == qitem->tag) || qi->tag == -1)
         && ((qi->source_rank == qitem->source_rank) || qi->source_rank == -1)) {
       matched = 1;
@@ -1313,7 +1289,7 @@ static int remove_matching_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
       issue_next_event(lp);
     }
 
-    qlist_del(&qi->ql); // Remove element
+    qlist_del(&qi->ql); // Remove matched recv
 
     rc_stack_push(lp, qi, free, s->rc_processed_ops);
 
@@ -1358,7 +1334,7 @@ static void update_arrival_queue(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* l
 
   // Create entry for arrived MPI send operation.
   // This is used to find if there is a matching receive;
-  // if not it is stored for matching later.
+  // if not it is stored in arriavl_queue for matching later.
   mpi_msg_queue* arrived_op = (mpi_msg_queue*) malloc(sizeof(mpi_msg_queue));
   arrived_op->op_type = m->op_type;
   arrived_op->tag = m->fwd.tag;
@@ -1375,7 +1351,7 @@ static void update_arrival_queue(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* l
     qlist_add_tail(&arrived_op->ql, &s->arrival_queue);
   }
   else {
-    m->fwd.found_match = found_matching_recv; // Record the element index for RC
+    m->fwd.found_match = found_matching_recv; // Record element index for RC
     free(arrived_op);
   }
 }
@@ -1573,7 +1549,7 @@ void nw_test_event_handler(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
       break;
     case MPI_REND_ARRIVED:
       {
-        if(enable_msg_tracking) {
+        if (enable_msg_tracking) {
           mpi_msg_queue mpi_op;
           mpi_op.op_type = m->op_type;
           mpi_op.tag = m->fwd.tag;
@@ -1589,7 +1565,7 @@ void nw_test_event_handler(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
         if (alloc_spec)
           global_src_id = get_global_id_of_job_rank(m->fwd.src_rank, s->app_id);
 
-        // Create callback event
+        // Create callback event to log message time
         tw_event *e_callback = tw_event_new(rank_to_lpid(global_src_id),
             codes_local_latency(lp), lp);
         nw_message *m_callback = (nw_message*)tw_event_data(e_callback);
