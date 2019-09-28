@@ -410,8 +410,7 @@ static void print_msgs_queue(struct qlist_head* head, int is_send)
 
   struct qlist_head* ent = NULL;
   mpi_msg_queue* current = NULL;
-  qlist_for_each(ent, head)
-  {
+  qlist_for_each(ent, head) {
     current = qlist_entry(ent, mpi_msg_queue, ql);
     printf("source %d dest %d bytes %"PRId64" tag %d\n", current->source_rank,
         current->dest_rank, current->num_bytes, current->tag);
@@ -437,8 +436,7 @@ static void print_completed_queue(tw_lp* lp, struct qlist_head* head)
   struct qlist_head * ent = NULL;
   struct completed_requests* current = NULL;
   tw_output(lp, "\n");
-  qlist_for_each(ent, head)
-  {
+  qlist_for_each(ent, head) {
     current = qlist_entry(ent, completed_requests, ql);
     tw_output(lp, " %llu ", current->req_id);
   }
@@ -454,8 +452,7 @@ static int clear_completed_reqs(nw_state* s, tw_lp* lp, unsigned int* reqs, int 
     struct completed_requests* prev = NULL; // Used to store deleted request for RC
 
     int index = 0;
-    qlist_for_each(ent, &s->completed_reqs)
-    {
+    qlist_for_each(ent, &s->completed_reqs) {
       if (prev) {
         rc_stack_push(lp, prev, free, s->rc_matched_reqs);
         prev = NULL;
@@ -555,8 +552,7 @@ static void codes_exec_mpi_wait_rc(nw_state* s, tw_bf * bf, tw_lp* lp, nw_messag
         {
            int index = 1;
            struct qlist_head * ent = NULL;
-           qlist_for_each(ent, &s->completed_reqs)
-           {
+           qlist_for_each(ent, &s->completed_reqs) {
                 if(index == m->fwd.found_match)
                 {
                     qlist_add(&qi->ql, ent);
@@ -586,8 +582,7 @@ static void codes_exec_mpi_wait(nw_state* s, tw_bf * bf, nw_message * m, tw_lp* 
 
     struct qlist_head * ent = NULL;
     int index = 0;
-    qlist_for_each(ent, &s->completed_reqs)
-    {
+    qlist_for_each(ent, &s->completed_reqs) {
         current = qlist_entry(ent, completed_requests, ql);
         if(current->req_id == req_id)
         {
@@ -691,8 +686,7 @@ static void codes_exec_mpi_wait_all(
       unsigned int req_id = mpi_op->u.waits.req_ids[i];
       struct qlist_head * ent = NULL;
       struct completed_requests* current = NULL;
-      qlist_for_each(ent, &s->completed_reqs)
-       {
+      qlist_for_each(ent, &s->completed_reqs) {
             current = qlist_entry(ent, struct completed_requests, ql);
             if(current->req_id == req_id)
                 num_matched++;
@@ -898,8 +892,7 @@ static void codes_exec_mpi_recv_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp*
     else {
       int index = 1;
       struct qlist_head* ent = NULL;
-      qlist_for_each(ent, &s->arrival_queue)
-      {
+      qlist_for_each(ent, &s->arrival_queue) {
         if (index == m->fwd.found_match) {
           qlist_add(&qi->ql, ent);
           break;
@@ -1379,8 +1372,7 @@ static void update_arrival_queue_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp
     else {
       int index = 1;
       struct qlist_head* ent = NULL;
-      qlist_for_each(ent, &s->pending_recvs_queue)
-      {
+      qlist_for_each(ent, &s->pending_recvs_queue) {
         if (index == m->fwd.found_match) {
           qlist_add(&qi->ql, ent);
           break;
@@ -1888,8 +1880,7 @@ void nw_test_finalize(nw_state* s, tw_lp* lp)
 
     struct msg_size_info* tmp_msg = NULL;
     struct qlist_head* ent = NULL;
-    qlist_for_each(ent, &s->msg_sz_list)
-    {
+    qlist_for_each(ent, &s->msg_sz_list) {
       tmp_msg = qlist_entry(ent, struct msg_size_info, ql);
       printf("rank %d msg size %"PRId64" num_msgs %d agg_latency %f avg_latency %f\n",
           s->local_rank, tmp_msg->msg_size, tmp_msg->num_msgs, tmp_msg->agg_latency, tmp_msg->avg_latency);
