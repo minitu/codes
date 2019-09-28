@@ -325,6 +325,7 @@ static void codes_exec_mpi_send_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp*
 static void codes_exec_mpi_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op);
 static void codes_exec_mpi_recv_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void codes_exec_comp_delay(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp, struct codes_workload_op* mpi_op);
+static void codes_exec_comp_delay_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void get_next_mpi_operation(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp);
 static void issue_next_event(tw_lp* lp);
@@ -488,10 +489,10 @@ static void add_completed_reqs(nw_state* s, tw_lp* lp, int count)
   }
 }
 
-/* helper function - maps an MPI rank to an LP id */
+// Maps an MPI rank to a LP ID
 static tw_lpid rank_to_lpid(int rank)
 {
-    return codes_mapping_get_lpid_from_relative(rank, NULL, "nw-lp", NULL, 0);
+  return codes_mapping_get_lpid_from_relative(rank, NULL, "nw-lp", NULL, 0);
 }
 
 static int notify_posted_wait(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
@@ -784,11 +785,6 @@ static int remove_matching_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
   return -1;
 }
 
-static void issue_next_event_rc(tw_lp* lp)
-{
-  tw_rand_reverse_unif(lp->rng);
-}
-
 // Trigger to fetch next MPI operation
 static void issue_next_event(tw_lp* lp)
 {
@@ -802,34 +798,46 @@ static void issue_next_event(tw_lp* lp)
   tw_event_send(e);
 }
 
-/* Simulate delays between MPI operations */
-static void codes_exec_comp_delay(
-        nw_state* s, tw_bf *bf, nw_message * m, tw_lp* lp, struct codes_workload_op * mpi_op)
+static void issue_next_event_rc(tw_lp* lp)
 {
-    bf->c28 = 0;
-	tw_event* e;
-	tw_stime ts;
-	nw_message* msg;
+  tw_rand_reverse_unif(lp->rng);
+}
 
-    m->rc.saved_delay = s->compute_time;
-    m->rc.saved_delay_sample = s->ross_sample.compute_time;
-    s->compute_time += (mpi_op->u.delay.nsecs/compute_time_speedup);
-    s->ross_sample.compute_time += (mpi_op->u.delay.nsecs/compute_time_speedup);
-    ts = (mpi_op->u.delay.nsecs/compute_time_speedup);
-    if(ts <= g_tw_lookahead)
-    {
-        bf->c28 = 1;
-        ts = g_tw_lookahead + 0.1 + tw_rand_exponential(lp->rng, noise);
-    }
+// Simulate computation/delay between MPI operations
+static void codes_exec_comp_delay(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
+    struct codes_workload_op* mpi_op)
+{
+  bf->c28 = 0;
+  tw_event* e;
+  tw_stime ts;
+  nw_message* msg;
 
-	//ts += g_tw_lookahead + 0.1 + tw_rand_exponential(lp->rng, noise);
-    assert(ts > 0);
+  m->rc.saved_delay = s->compute_time;
+  m->rc.saved_delay_sample = s->ross_sample.compute_time;
+  s->compute_time += (mpi_op->u.delay.nsecs/compute_time_speedup);
+  s->ross_sample.compute_time += (mpi_op->u.delay.nsecs/compute_time_speedup);
 
-	e = tw_event_new( lp->gid, ts , lp );
-	msg = (nw_message*)tw_event_data(e);
-	msg->msg_type = MPI_OP_GET_NEXT;
-	tw_event_send(e);
+  ts = (mpi_op->u.delay.nsecs/compute_time_speedup);
+  if (ts <= g_tw_lookahead) {
+    bf->c28 = 1;
+    ts = g_tw_lookahead + 0.1 + tw_rand_exponential(lp->rng, noise);
+  }
 
+  assert(ts > 0);
+
+  e = tw_event_new(lp->gid, ts , lp);
+  msg = (nw_message*)tw_event_data(e);
+  msg->msg_type = MPI_OP_GET_NEXT;
+  tw_event_send(e);
+}
+
+static void codes_exec_comp_delay_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
+{
+  if (bf->c28)
+    tw_rand_reverse_unif(lp->rng);
+
+  s->compute_time = m->rc.saved_delay;
+  s->ross_sample.compute_time = m->rc.saved_delay_sample;
 }
 
 // Executes MPI_Recv and MPI_Irecv operations
@@ -1704,7 +1712,8 @@ static void get_next_mpi_operation(nw_state* s, tw_bf* bf, nw_message* m, tw_lp*
     case CODES_WK_DELAY:
       {
         s->num_delays++;
-        if(disable_compute)
+        // If compute simulation is disabled, fetch the next MPI operation
+        if (disable_compute)
           issue_next_event(lp);
         else
           codes_exec_comp_delay(s, bf, m, lp, mpi_op);
@@ -1794,12 +1803,8 @@ static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_
         s->num_delays--;
         if (disable_compute)
           issue_next_event_rc(lp);
-        else {
-          if (bf->c28)
-            tw_rand_reverse_unif(lp->rng);
-          s->compute_time = m->rc.saved_delay;
-          s->ross_sample.compute_time = m->rc.saved_delay_sample;
-        }
+        else
+          codes_exec_comp_delay_rc(s, bf, m, lp);
       }
       break;
     case CODES_WK_ALLREDUCE:
