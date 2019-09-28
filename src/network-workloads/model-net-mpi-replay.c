@@ -539,187 +539,176 @@ static int notify_posted_wait(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
   return wait_completed;
 }
 
-/* reverse handler of MPI wait operation */
-static void codes_exec_mpi_wait_rc(nw_state* s, tw_bf * bf, tw_lp* lp, nw_message * m)
+
+// Executes MPI_Wait
+static void codes_exec_mpi_wait(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
+    struct codes_workload_op* mpi_op)
 {
-   if(bf->c1)
-    {
-        completed_requests * qi = (completed_requests*)rc_stack_pop(s->rc_processed_ops);
-        if(m->fwd.found_match == 0)
-        {
-            qlist_add(&qi->ql, &s->completed_reqs);
-        }
-        else
-        {
-           int index = 1;
-           struct qlist_head * ent = NULL;
-           qlist_for_each(ent, &s->completed_reqs) {
-                if(index == m->fwd.found_match)
-                {
-                    qlist_add(&qi->ql, ent);
-                    break;
-                }
-                index++;
-           }
-        }
-        issue_next_event_rc(lp);
-        return;
+  assert(!s->wait_op);
+
+  // Check if there is a corresponding operation that is already complete
+  int index = 0;
+  unsigned int req_id = mpi_op->u.wait.req_id;
+  struct completed_requests* current = NULL;
+  struct qlist_head* ent = NULL;
+
+  qlist_for_each(ent, &s->completed_reqs) {
+    current = qlist_entry(ent, completed_requests, ql);
+    if (current->req_id == req_id) {
+      bf->c1 = 1;
+      qlist_del(&current->ql);
+      rc_stack_push(lp, current, free, s->rc_processed_ops);
+      issue_next_event(lp);
+      m->fwd.found_match = index;
+      return;
     }
-         struct pending_waits * wait_op = s->wait_op;
-         free(wait_op);
-         s->wait_op = NULL;
-}
-
-/* execute MPI wait operation */
-static void codes_exec_mpi_wait(nw_state* s, tw_bf * bf, nw_message * m, tw_lp* lp, struct codes_workload_op * mpi_op)
-{
-    /* check in the completed receives queue if the request ID has already been completed.*/
-                
-//    printf("\n Wait posted rank id %d ", s->nw_id);
-    assert(!s->wait_op);
-    unsigned int req_id = mpi_op->u.wait.req_id;
-
-    struct completed_requests* current = NULL;
-
-    struct qlist_head * ent = NULL;
-    int index = 0;
-    qlist_for_each(ent, &s->completed_reqs) {
-        current = qlist_entry(ent, completed_requests, ql);
-        if(current->req_id == req_id)
-        {
-            bf->c1=1;
-            qlist_del(&current->ql);
-            rc_stack_push(lp, current, free, s->rc_processed_ops);
-            issue_next_event(lp);
-            m->fwd.found_match = index;
-            return;
-        }
-        ++index;
-    }
-
-    /* If not, add the wait operation in the pending 'waits' list. */
-    struct pending_waits* wait_op = (struct pending_waits*)malloc(sizeof(struct pending_waits));
-    wait_op->op_type = mpi_op->op_type;
-    wait_op->req_ids[0] = req_id;
-    wait_op->count = 1;
-    wait_op->num_completed = 0;
-    wait_op->start_time = tw_now(lp);
-    s->wait_op = wait_op;
-
-    return;
-}
-
-static void codes_exec_mpi_wait_all_rc(
-        nw_state* s,
-        tw_bf * bf,
-        nw_message * m,
-        tw_lp* lp)
-{
-  if(bf->c1)
-  {
-    int sampling_indx = s->sampling_indx;
-    s->mpi_wkld_samples[sampling_indx].num_waits_sample--;
-
-    if(bf->c2)
-    {
-        s->cur_interval_end -= sampling_interval;
-        s->sampling_indx--;
-    }
+    ++index;
   }
-  if(s->wait_op)
-  {
-      struct pending_waits * wait_op = s->wait_op;
-      free(wait_op);
-      s->wait_op = NULL;
-  }
-  else
-  {
-      add_completed_reqs(s, lp, m->fwd.num_matched);
-      issue_next_event_rc(lp);
-  }
+
+  // Otherwise, add the wait operation to the queue.
+  // This will be later handled by update_completed_queue().
+  struct pending_waits* wait_op = (struct pending_waits*)malloc(sizeof(struct pending_waits));
+  wait_op->op_type = mpi_op->op_type;
+  wait_op->req_ids[0] = req_id;
+  wait_op->count = 1;
+  wait_op->num_completed = 0;
+  wait_op->start_time = tw_now(lp);
+  s->wait_op = wait_op;
+
   return;
 }
 
-static void codes_exec_mpi_wait_all(
-        nw_state* s,
-        tw_bf * bf,
-        nw_message * m,
-        tw_lp* lp,
-        struct codes_workload_op * mpi_op)
+static void codes_exec_mpi_wait_rc(nw_state* s, tw_bf* bf, tw_lp* lp, nw_message* m)
 {
-  if(enable_debug)
-    fprintf(debug_log_file, "\n MPI WAITALL POSTED AT %llu ", LLU(s->nw_id));
+  if (bf->c1) {
+    completed_requests* qi = (completed_requests*)rc_stack_pop(s->rc_processed_ops);
+    if (m->fwd.found_match == 0) {
+      qlist_add(&qi->ql, &s->completed_reqs);
+    }
+    else {
+      int index = 1;
+      struct qlist_head* ent = NULL;
+      qlist_for_each(ent, &s->completed_reqs) {
+        if (index == m->fwd.found_match) {
+          qlist_add(&qi->ql, ent);
+          break;
+        }
+        index++;
+      }
+    }
+    issue_next_event_rc(lp);
+    return;
+  }
 
-  if(enable_sampling)
-  {
+  struct pending_waits* wait_op = s->wait_op;
+  free(wait_op);
+  s->wait_op = NULL;
+}
+
+// Executes MPI_Waitall
+static void codes_exec_mpi_waitall(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp,
+    struct codes_workload_op* mpi_op)
+{
+  if (enable_debug)
+    fprintf(debug_log_file, "MPI WAITALL POSTED FROM %llu\n", LLU(s->nw_id));
+
+  // Handle sampling
+  if (enable_sampling) {
     bf->c1 = 1;
-    if(tw_now(lp) >= s->cur_interval_end)
-    {
-        bf->c2 = 1;
-        int indx = s->sampling_indx;
-        s->mpi_wkld_samples[indx].nw_id = s->nw_id;
-        s->mpi_wkld_samples[indx].app_id = s->app_id;
-        s->mpi_wkld_samples[indx].sample_end_time = s->cur_interval_end;
-        s->cur_interval_end += sampling_interval;
-        s->sampling_indx++;
+
+    if (tw_now(lp) >= s->cur_interval_end) {
+      bf->c2 = 1;
+      int indx = s->sampling_indx;
+      s->mpi_wkld_samples[indx].nw_id = s->nw_id;
+      s->mpi_wkld_samples[indx].app_id = s->app_id;
+      s->mpi_wkld_samples[indx].sample_end_time = s->cur_interval_end;
+      s->cur_interval_end += sampling_interval;
+      s->sampling_indx++;
     }
-    if(s->sampling_indx >= MAX_STATS)
-    {
-        struct mpi_workload_sample * tmp = (struct mpi_workload_sample*)calloc((MAX_STATS + s->max_arr_size), sizeof(struct mpi_workload_sample));
-        memcpy(tmp, s->mpi_wkld_samples, s->sampling_indx);
-        free(s->mpi_wkld_samples);
-        s->mpi_wkld_samples = tmp;
-        s->max_arr_size += MAX_STATS;
+
+    if (s->sampling_indx >= MAX_STATS) {
+      struct mpi_workload_sample* tmp = (struct mpi_workload_sample*)calloc(
+          (MAX_STATS + s->max_arr_size), sizeof(struct mpi_workload_sample));
+      memcpy(tmp, s->mpi_wkld_samples, s->sampling_indx);
+      free(s->mpi_wkld_samples);
+      s->mpi_wkld_samples = tmp;
+      s->max_arr_size += MAX_STATS;
     }
+
     int indx = s->sampling_indx;
     s->mpi_wkld_samples[indx].num_waits_sample++;
   }
-  int count = mpi_op->u.waits.count;
-  /* If the count is not less than max wait reqs then stop */
-  assert(count < MAX_WAIT_REQS);
+
+  int wait_count = mpi_op->u.waits.count; // Number of requests to wait on
+  assert(wait_count < MAX_WAIT_REQS);
 
   int i = 0, num_matched = 0;
   m->fwd.num_matched = 0;
 
-      /* check number of completed irecvs in the completion queue */
-  for(i = 0; i < count; i++)
-  {
-      unsigned int req_id = mpi_op->u.waits.req_ids[i];
-      struct qlist_head * ent = NULL;
-      struct completed_requests* current = NULL;
-      qlist_for_each(ent, &s->completed_reqs) {
-            current = qlist_entry(ent, struct completed_requests, ql);
-            if(current->req_id == req_id)
-                num_matched++;
-       }
+  // Check number of completed requests that matches to this wait
+  for (i = 0; i < wait_count; i++) {
+    unsigned int req_id = mpi_op->u.waits.req_ids[i];
+    struct qlist_head* ent = NULL;
+    struct completed_requests* current = NULL;
+
+    qlist_for_each(ent, &s->completed_reqs) {
+      current = qlist_entry(ent, struct completed_requests, ql);
+      if (current->req_id == req_id)
+        num_matched++;
+    }
   }
 
   m->fwd.found_match = num_matched;
-  if(num_matched == count)
-  {
-    /* No need to post a MPI Wait all then, issue next event */
-      /* Remove all completed requests from the list */
-      m->fwd.num_matched = clear_completed_reqs(s, lp, mpi_op->u.waits.req_ids, count);
-      struct pending_waits* wait_op = s->wait_op;
-      free(wait_op);
-      s->wait_op = NULL;
-      issue_next_event(lp);
-  }
-  else
-  {
-      /* If not, add the wait operation in the pending 'waits' list. */
-	  struct pending_waits* wait_op = (struct pending_waits*)malloc(sizeof(struct pending_waits));
-	  wait_op->count = count;
-      wait_op->op_type = mpi_op->op_type;
-      assert(count < MAX_WAIT_REQS);
 
-      for(i = 0; i < count; i++)
-          wait_op->req_ids[i] =  mpi_op->u.waits.req_ids[i];
+  if (num_matched == wait_count) {
+    // All corresponding requests are already complete.
+    // Remove all completed requests and fetch next MPI operation
+    m->fwd.num_matched = clear_completed_reqs(s, lp, mpi_op->u.waits.req_ids, wait_count);
+    struct pending_waits* wait_op = s->wait_op;
+    free(wait_op);
+    s->wait_op = NULL;
 
-	  wait_op->num_completed = num_matched;
-	  wait_op->start_time = tw_now(lp);
-      s->wait_op = wait_op;
+    issue_next_event(lp);
   }
+  else {
+    // Some requests are not yet complete, add as pending
+    struct pending_waits* wait_op = (struct pending_waits*)malloc(sizeof(struct pending_waits));
+    wait_op->count = wait_count;
+    wait_op->op_type = mpi_op->op_type;
+
+    for (i = 0; i < wait_count; i++)
+      wait_op->req_ids[i] =  mpi_op->u.waits.req_ids[i];
+
+    wait_op->num_completed = num_matched;
+    wait_op->start_time = tw_now(lp);
+    s->wait_op = wait_op;
+  }
+
+  return;
+}
+
+static void codes_exec_mpi_waitall_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
+{
+  if (bf->c1) {
+    int sampling_indx = s->sampling_indx;
+    s->mpi_wkld_samples[sampling_indx].num_waits_sample--;
+
+    if (bf->c2) {
+      s->cur_interval_end -= sampling_interval;
+      s->sampling_indx--;
+    }
+  }
+
+  if (s->wait_op) {
+    struct pending_waits* wait_op = s->wait_op;
+    free(wait_op);
+    s->wait_op = NULL;
+  }
+  else {
+    add_completed_reqs(s, lp, m->fwd.num_matched);
+    issue_next_event_rc(lp);
+  }
+
   return;
 }
 
@@ -1729,7 +1718,7 @@ static void get_next_mpi_operation(nw_state* s, tw_bf* bf, nw_message* m, tw_lp*
     case CODES_WK_WAITALL:
       {
         s->num_waitall++;
-        codes_exec_mpi_wait_all(s, bf, m, lp, mpi_op);
+        codes_exec_mpi_waitall(s, bf, m, lp, mpi_op);
         //issue_next_event(lp);
       }
       break;
@@ -1848,7 +1837,7 @@ static void get_next_mpi_operation_rc(nw_state* s, tw_bf* bf, nw_message* m, tw_
     case CODES_WK_WAITALL:
       {
         s->num_waitall--;
-        codes_exec_mpi_wait_all_rc(s, bf, m, lp);
+        codes_exec_mpi_waitall_rc(s, bf, m, lp);
       }
       break;
     default:
