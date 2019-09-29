@@ -87,8 +87,7 @@ typedef unsigned int dumpi_req_id;
 
 static int net_id = 0;
 static float noise = 1.0; // Used in creating random time values
-static int num_nw_lps = 0, num_mpi_lps = 0;
-
+static int total_ranks = 0, ranks_per_node = 0;
 
 // Output log files
 FILE* debug_log_file = NULL;
@@ -1435,7 +1434,7 @@ void nw_test_init(nw_state* s, tw_lp* lp)
 
   // Confirm that there is at least one trace, and
   // number of traces are <= number of simulated MPI ranks (LPs)
-  assert(num_net_traces > 0 && num_net_traces <= num_mpi_lps);
+  assert(num_net_traces > 0 && num_net_traces <= total_ranks);
 
   struct codes_jobmap_id lid;
   if (alloc_spec) {
@@ -1502,7 +1501,6 @@ void nw_test_init(nw_state* s, tw_lp* lp)
 
   s->app_id = lid.job;
   s->local_rank = lid.rank;
-  printf("LP gid %d, nw_id %d, local_rank %d\n", lp->gid, s->nw_id, s->local_rank);
 
   // Load the workload into CODES.
   // Workload ID is used to fetch the next MPI operation.
@@ -2227,8 +2225,8 @@ int modelnet_mpi_replay(MPI_Comm comm, int* argc, char*** argv )
 
   codes_mapping_setup();
 
-  num_mpi_lps = codes_mapping_get_lp_count("MODELNET_GRP", 0, "nw-lp", NULL, 0);
-  num_nw_lps = codes_mapping_get_lp_count("MODELNET_GRP", 1, "nw-lp", NULL, 1); // Ignores repetitions & annotations
+  total_ranks = codes_mapping_get_lp_count("MODELNET_GRP", 0, "nw-lp", NULL, 0);
+  ranks_per_node = codes_mapping_get_lp_count("MODELNET_GRP", 1, "nw-lp", NULL, 1); // Ignores repetitions & annotations
 
   // Prepare LP-IO
   if (lp_io_dir[0]) {
