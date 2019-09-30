@@ -48,7 +48,7 @@ static int wrkld_id;
 static int num_net_traces = 0;
 static int priority_type = 0;
 static int num_dumpi_traces = 0;
-static int64_t EAGER_THRESHOLD = 8388608;
+static int64_t eager_limit = 8388608;
 
 static long num_ops = 0;
 static int upper_threshold = 1048576;
@@ -734,11 +734,11 @@ static int remove_matching_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
   }
 
   if (matched) {
-    if (enable_msg_tracking && (qi->num_bytes < EAGER_THRESHOLD))
+    if (enable_msg_tracking && (qi->num_bytes < eager_limit))
       update_message_size(s, lp, bf, m, qi, 1, 0);
 
     m->fwd.matched_req = qitem->req_id;
-    if (qitem->num_bytes >= EAGER_THRESHOLD) {
+    if (qitem->num_bytes >= eager_limit) {
       // Matching message arrival (send) found.
       // Need to notify sender to transmit the actual data.
       bf->c10 = 1;
@@ -993,7 +993,7 @@ static void codes_exec_mpi_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
   local_m.fwd.rend_send = 0;
 
   int is_eager = 0;
-  if (mpi_op->u.send.num_bytes < EAGER_THRESHOLD) {
+  if (mpi_op->u.send.num_bytes < eager_limit) {
     // Eager message, directly issue a model-net send
     bf->c15 = 1;
     is_eager = 1;
@@ -1247,7 +1247,7 @@ static int remove_matching_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
   }
 
   if (matched) {
-    if (qitem->num_bytes < EAGER_THRESHOLD) {
+    if (qitem->num_bytes < eager_limit) {
       // Eager message, store message information
       if (enable_msg_tracking)
         update_message_size(s, lp, bf, m, qitem, 1, 1);
@@ -1309,7 +1309,7 @@ static void update_arrival_queue(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* l
     global_src_id = get_global_id_of_job_rank(m->fwd.src_rank, s->app_id);
   }
 
-  if (m->fwd.num_bytes < EAGER_THRESHOLD) {
+  if (m->fwd.num_bytes < eager_limit) {
     // If received message is eager, send a callback with message latency
     bf->c1 = 1;
     tw_stime ts = codes_local_latency(lp);
@@ -1597,7 +1597,7 @@ void nw_test_event_handler(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp)
       {
         // Check if message is eager
         int is_eager = 0;
-        if (m->fwd.num_bytes < EAGER_THRESHOLD)
+        if (m->fwd.num_bytes < eager_limit)
           is_eager = 1;
 
         if (m->op_type == CODES_WK_SEND && (is_eager == 1 || m->fwd.rend_send == 1)) {
@@ -1953,7 +1953,6 @@ const tw_optdef app_opt [] =
   TWOPT_CHAR("alloc_file", alloc_file, "allocation file name"),
   TWOPT_UINT("num_net_traces", num_net_traces, "number of network traces"),
   TWOPT_UINT("priority_type", priority_type, "priority type (zero): high priority to foreground traffic and low to background/2nd job, (one): high priority to collective operations"),
-  TWOPT_UINT("eager_threshold", EAGER_THRESHOLD, "the transition point for eager/rendezvous protocols (default 8192)"),
   TWOPT_UINT("disable_compute", disable_compute, "disable compute simulation"),
   TWOPT_UINT("debug_cols", debug_cols, "completion time of collective operations (currently MPI_AllReduce)"),
   TWOPT_UINT("enable_mpi_debug", enable_debug, "enable debugging of MPI sim layer (works with sync=1 only)"),
@@ -2072,6 +2071,12 @@ void modelnet_mpi_replay_read_config()
   // e.g. If compute_time_speedup = 2, all compute time delay is halved.
   configuration_get_value_double(&config, "PARAMS", "compute_time_speedup", NULL, &compute_time_speedup);
   configuration_get_value_double(&config, "PARAMS", "self_msg_overhead", NULL, &self_overhead);
+  configuration_get_value_double(&config, "PARAMS", "nic_delay", NULL, &nic_delay);
+  configuration_get_value_double(&config, "PARAMS", "soft_delay", NULL, &soft_delay_mpi);
+  configuration_get_value_double(&config, "PARAMS", "copy_per_byte", NULL, &copy_per_byte_eager);
+  int eager_limit_int;
+  configuration_get_value_int(&config, "PARAMS", "eager_limit", NULL, &eager_limit_int);
+  eager_limit = (uint64_t)eager_limit_int;
 }
 
 // Main
