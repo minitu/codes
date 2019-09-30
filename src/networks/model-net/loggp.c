@@ -29,6 +29,7 @@
 // that we want to collect results based on the old model
 #define USE_RECV_QUEUE 1
 
+#define N_PARAM_TYPES 3
 #define LOGGP_MSG_TRACE 0
 
 #if LOGGP_MSG_TRACE
@@ -58,30 +59,38 @@ struct param_table_entry
 };
 typedef struct param_table_entry param_table_entry;
 
-typedef struct loggp_param loggp_param;
-// loggp parameters
+// LogGP parameters, read from netgauge output
 struct loggp_param
 {
     int table_size;
-    param_table_entry table[100];
+    param_table_entry table[64];
 };
+typedef struct loggp_param loggp_param;
 
+// Compute node parameters
+struct node_param
+{
+    int node_size; // Number of MPI ranks per compute node
+    int socket_size; // Number of MPI ranks per socket
+};
+typedef struct node_param node_param;
 
 struct loggp_state
 {
     /* next idle times for network card, both inbound and outbound */
     tw_stime net_send_next_idle;
     tw_stime net_recv_next_idle;
-    const char * anno;
-    const loggp_param *params;
+    const char* anno;
+    const loggp_param* params[N_PARAM_TYPES];
     struct mn_stats loggp_stats_array[CATEGORY_MAX];
 };
 
 /* annotation-specific parameters (unannotated entry occurs at the
  * last index) */
-static uint64_t                  num_params = 0;
-static loggp_param             * all_params = NULL;
-static const config_anno_map_t * anno_map   = NULL;
+static uint64_t                  num_params  = 0;
+static loggp_param             * all_params  = NULL;
+static node_param              * node_params = NULL;
+static const config_anno_map_t * anno_map    = NULL;
 
 static int loggp_magic = 0;
 
@@ -255,12 +264,18 @@ static void loggp_init(
     ns->net_send_next_idle = tw_now(lp);
     ns->net_recv_next_idle = tw_now(lp);
 
+    int i;
     ns->anno = codes_mapping_get_annotation_by_lpid(lp->gid);
-    if (ns->anno == NULL)
-        ns->params = &all_params[num_params-1];
-    else{
+    if (ns->anno == NULL) {
+        for (i = 0; i < N_PARAM_TYPES; i++) {
+            ns->params[i] = &all_params[num_params-N_PARAM_TYPES+i];
+        }
+    }
+    else {
         int id = configuration_get_annotation_index(ns->anno, anno_map);
-        ns->params = &all_params[id];
+        for (i = 0; i < N_PARAM_TYPES; i++) {
+            ns->params[i] = &all_params[id+i];
+        }
     }
 
     bj_hashlittle2(LP_METHOD_NM, strlen(LP_METHOD_NM), &h1, &h2);
@@ -331,6 +346,38 @@ int loggp_get_magic()
   return loggp_magic;
 }
 
+static int get_param_index(tw_lpid src, tw_lpid dest) {
+    int param_index = 2;
+
+    int src_rel_id = codes_mapping_get_lp_relative_id(src, 0, 0);
+    int dest_rel_id = codes_mapping_get_lp_relative_id(dest, 0, 0);
+
+    int src_node_id = src_rel_id / node_params->node_size;
+    int dest_node_id = dest_rel_id / node_params->node_size;
+
+    if (src_node_id != dest_node_id) {
+        // Inter-node
+        param_index = 2;
+    }
+    else {
+        int src_local_id = src_rel_id % node_params->node_size;
+        int dest_local_id = dest_rel_id % node_params->node_size;
+        int src_socket_id = src_local_id / node_params->socket_size;
+        int dest_socket_id = dest_local_id / node_params->socket_size;
+
+        if (src_socket_id != dest_socket_id) {
+            // Inter-socket
+            param_index = 1;
+        }
+        else {
+            // Intra-socket
+            param_index = 0;
+        }
+    }
+
+    return param_index;
+}
+
 /* reverse computation for msg ready event */
 static void handle_msg_ready_rev_event(
     loggp_state * ns,
@@ -377,9 +424,12 @@ static void handle_msg_ready_event(
     loggp_message *m_new;
     struct mn_stats* stat;
     double recv_time;
-    const struct param_table_entry *param;
 
-    param = find_params(m->net_msg_size_bytes, ns->params);
+    // Determine which parameter to use, depending on
+    // intra-socket, inter-socket (intra-node), and inter-node
+    const struct param_table_entry* param;
+    int param_index = get_param_index(m->src_mn_lp, lp->gid);
+    param = find_params(m->net_msg_size_bytes, ns->params[param_index]);
 
     recv_time = ((double)(m->net_msg_size_bytes-1)*param->G);
     /* scale to nanoseconds */
@@ -500,9 +550,12 @@ static void handle_msg_start_event(
     mn_stats* stat;
     int total_event_size;
     double xmit_time;
-    const struct param_table_entry *param;
 
-    param = find_params(m->net_msg_size_bytes, ns->params);
+    // Determine which parameter to use, depending on
+    // intra-socket, inter-socket (intra-node), and inter-node
+    const struct param_table_entry* param;
+    int param_index = get_param_index(lp->gid, m->dest_mn_lp);
+    param = find_params(m->net_msg_size_bytes, ns->params[param_index]);
 
     total_event_size = model_net_get_msg_sz(LOGGP) + m->event_size_bytes +
         m->local_event_size_bytes;
@@ -713,40 +766,87 @@ void loggp_recv_msg_event_rc(tw_lp *sender){
     codes_local_latency_reverse(sender);
 }
 
-static void loggp_configure(){
-    char config_file[MAX_NAME_LENGTH];
+static void loggp_configure() {
+    // Read configuration files
+    char intra_socket_config_file[MAX_NAME_LENGTH];
+    char inter_socket_config_file[MAX_NAME_LENGTH];
+    char inter_node_config_file[MAX_NAME_LENGTH];
+    int socket_size;
 
     anno_map = codes_mapping_get_lp_anno_map(LP_CONFIG_NM);
     assert(anno_map);
-    num_params = anno_map->num_annos + (anno_map->has_unanno_lp > 0);
+    num_params = N_PARAM_TYPES * (anno_map->num_annos + (anno_map->has_unanno_lp > 0));
     all_params = malloc(num_params * sizeof(*all_params));
+    node_params = malloc(sizeof(node_param));
 
-    for (int i = 0; i < anno_map->num_annos; i++){
-        const char * anno = anno_map->annotations[i].ptr;
+    for (int i = 0; i < anno_map->num_annos; i++) {
+        const char* anno = anno_map->annotations[i].ptr;
+
         int rc = configuration_get_value_relpath(&config, "PARAMS",
-                "net_config_file", anno, config_file, MAX_NAME_LENGTH);
-        if (rc <= 0){
-            tw_error(TW_LOC, "unable to read PARAMS:net_config_file@%s",
-                    anno);
+                "intra_socket_config_file", anno, intra_socket_config_file, MAX_NAME_LENGTH);
+        if (rc <= 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:intra_socket_config_file@%s", anno);
         }
-        loggp_set_params(config_file, &all_params[i]);
+        loggp_set_params(intra_socket_config_file, &all_params[i]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS",
+                "inter_socket_config_file", anno, inter_socket_config_file, MAX_NAME_LENGTH);
+        if (rc <= 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:inter_socket_config_file@%s", anno);
+        }
+        loggp_set_params(inter_socket_config_file, &all_params[i+1]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS",
+                "inter_node_config_file", anno, inter_node_config_file, MAX_NAME_LENGTH);
+        if (rc <= 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:inter_node_config_file@%s", anno);
+        }
+        loggp_set_params(inter_node_config_file, &all_params[i+2]);
+
+        rc = configuration_get_value_int(&config, "PARAMS", "socket_size", anno, &socket_size);
+        if (rc < 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:socket_size@%s", anno);
+        }
     }
-    if (anno_map->has_unanno_lp > 0){
+    if (anno_map->has_unanno_lp > 0) {
         int rc = configuration_get_value_relpath(&config, "PARAMS",
-                "net_config_file", NULL, config_file, MAX_NAME_LENGTH);
-        if (rc <= 0){
-            tw_error(TW_LOC, "unable to read PARAMS:net_config_file");
+                "intra_socket_config_file", NULL, intra_socket_config_file, MAX_NAME_LENGTH);
+        if (rc <= 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:intra_socket_config_file");
         }
-        loggp_set_params(config_file, &all_params[anno_map->num_annos]);
+        loggp_set_params(intra_socket_config_file, &all_params[N_PARAM_TYPES*anno_map->num_annos]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS",
+                "inter_socket_config_file", NULL, inter_socket_config_file, MAX_NAME_LENGTH);
+        if (rc <= 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:inter_socket_config_file");
+        }
+        loggp_set_params(inter_socket_config_file, &all_params[N_PARAM_TYPES*anno_map->num_annos+1]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS",
+                "inter_node_config_file", NULL, inter_node_config_file, MAX_NAME_LENGTH);
+        if (rc <= 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:inter_node_config_file");
+        }
+        loggp_set_params(inter_node_config_file, &all_params[N_PARAM_TYPES*anno_map->num_annos+2]);
+
+        rc = configuration_get_value_int(&config, "PARAMS", "socket_size", NULL, &socket_size);
+        if (rc < 0) {
+            tw_error(TW_LOC, "unable to read PARAMS:socket_size");
+        }
     }
+
+    // Store node parameters
+    node_params->node_size = codes_mapping_get_lp_count("MODELNET_GRP", 1, "modelnet_loggp", NULL, 1);
+    node_params->socket_size = socket_size;
 }
 
-void loggp_set_params(const char * config_file, loggp_param * params){
+void loggp_set_params(const char* config_file, loggp_param* params) {
     FILE *conf;
     int ret;
     char buffer[512];
     int line_nr = 0;
-    printf("Loggp configured to use parameters from file %s\n", config_file);
+    printf("LogGP configured to use parameters from file %s\n", config_file);
 
     conf = fopen(config_file, "r");
     if(!conf)
