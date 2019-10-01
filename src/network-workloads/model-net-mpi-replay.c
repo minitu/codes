@@ -2074,9 +2074,10 @@ void modelnet_mpi_replay_read_config()
   configuration_get_value_double(&config, "PARAMS", "nic_delay", NULL, &nic_delay);
   configuration_get_value_double(&config, "PARAMS", "soft_delay", NULL, &soft_delay_mpi);
   configuration_get_value_double(&config, "PARAMS", "copy_per_byte", NULL, &copy_per_byte_eager);
-  int eager_limit_int;
-  configuration_get_value_int(&config, "PARAMS", "eager_limit", NULL, &eager_limit_int);
-  eager_limit = (uint64_t)eager_limit_int;
+  configuration_get_value_int(&config, "PARAMS", "eager_limit", NULL, (int*)&eager_limit);
+  printf("compute_time_speedup: %lf, self_msg_overhead: %lf, nic_delay: %lf, "
+      "soft_delay: %lf, copy_per_byte: %lf, eager_limit: %llu\n", compute_time_speedup,
+      self_overhead, nic_delay, soft_delay_mpi, copy_per_byte_eager, eager_limit);
 }
 
 // Main
