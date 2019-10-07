@@ -20,14 +20,24 @@
 #define CATEGORY_NAME_MAX 16
 #define CATEGORY_MAX 12
 
+#define N_PARAM_TYPES 3
+
 #define LP_CONFIG_NM (model_net_lp_config_names[SIMPLENET])
 #define LP_METHOD_NM (model_net_method_names[SIMPLENET])
 
 /* structs for initializing a network/ specifying network parameters */
 struct simplenet_param
 {
-  double net_startup_ns; /*simplenet startup cost*/
-  double net_bw_mbps; /*Link bandwidth per byte*/
+    int short_limit;
+    int eager_limit;
+    double short_a;
+    double short_b;
+    double eager_a;
+    double eager_rcb;
+    double eager_rci;
+    double rend_a;
+    double rend_rcb;
+    double rend_rci;
 };
 typedef struct simplenet_param simplenet_param;
 
@@ -40,7 +50,7 @@ struct sn_state
     tw_stime net_send_next_idle;
     tw_stime net_recv_next_idle;
     const char * anno;
-    simplenet_param params;
+    const simplenet_param* params[N_PARAM_TYPES]; // intra-socket, inter-socket, inter-node
     struct mn_stats sn_stats_array[CATEGORY_MAX];
 };
 
@@ -49,6 +59,10 @@ struct sn_state
 static uint64_t                  num_params = 0;
 static simplenet_param         * all_params = NULL;
 static const config_anno_map_t * anno_map   = NULL;
+
+static int k_value = 1;
+static int node_size = 1;
+static int socket_size = 1;
 
 static int sn_magic = 0;
 
@@ -77,6 +91,8 @@ static void simple_net_collective_rc();
 /* Modelnet interface events */
 /* sets up the simplenet parameters through modelnet interface */
 static void sn_configure();
+
+void nodes_set_params(const char* config_file, simplenet_param* params);
 
 /* allocate a new event that will pass through simplenet to arriave at its
  * destination:
@@ -220,12 +236,18 @@ static void sn_init(
     ns->net_send_next_idle = tw_now(lp);
     ns->net_recv_next_idle = tw_now(lp);
 
+    int i = 0;
     ns->anno = codes_mapping_get_annotation_by_lpid(lp->gid);
-    if (ns->anno == NULL)
-        ns->params = all_params[num_params-1];
-    else{
+    if (ns->anno == NULL) {
+        for (i = 0; i < N_PARAM_TYPES; i++) {
+            ns->params[i] = &all_params[num_params-N_PARAM_TYPES+i];
+        }
+    }
+    else {
         int id = configuration_get_annotation_index(ns->anno, anno_map);
-        ns->params = all_params[id];
+        for (i = 0; i < N_PARAM_TYPES; i++) {
+            ns->params[i] = &all_params[id+i];
+        }
     }
 
     bj_hashlittle2(LP_METHOD_NM, strlen(LP_METHOD_NM), &h1, &h2);
@@ -311,6 +333,38 @@ static tw_stime rate_to_ns(uint64_t bytes, double MB_p_s)
     return(time);
 }
 
+static int get_param_index(tw_lpid src, tw_lpid dest) {
+    int param_index = 2;
+
+    int src_rel_id = codes_mapping_get_lp_relative_id(src, 0, 0);
+    int dest_rel_id = codes_mapping_get_lp_relative_id(dest, 0, 0);
+
+    int src_node_id = src_rel_id / node_size;
+    int dest_node_id = dest_rel_id / node_size;
+
+    if (src_node_id != dest_node_id) {
+        // Inter-node
+        param_index = 2;
+    }
+    else {
+        int src_local_id = src_rel_id % node_size;
+        int dest_local_id = dest_rel_id % node_size;
+        int src_socket_id = src_local_id / socket_size;
+        int dest_socket_id = dest_local_id / socket_size;
+
+        if (src_socket_id != dest_socket_id) {
+            // Inter-socket
+            param_index = 1;
+        }
+        else {
+            // Intra-socket
+            param_index = 0;
+        }
+    }
+
+    return param_index;
+}
+
 /* reverse computation for msg ready event */
 static void handle_msg_ready_rev_event(
     sn_state * ns,
@@ -344,6 +398,28 @@ static void handle_msg_ready_event(
     tw_stime recv_queue_time = 0;
     struct mn_stats* stat;
 
+    // Determine model parameters
+    int param_index = get_param_index(lp->gid, m->dest_mn_lp);
+    const simplenet_param* param = ns->params[param_index];
+    double start_up;
+    double per_byte_cost;
+
+    if (m->net_msg_size_bytes <= param->short_limit) {
+        // Short
+        start_up = param->short_a;
+        per_byte_cost = k_value * param->short_b;
+    }
+    else if (m->net_msg_size_bytes <= param->eager_limit) {
+        // Eager
+        start_up = param->eager_a;
+        per_byte_cost = k_value / (param->eager_rcb + (k_value - 1) * param->eager_rcb);
+    }
+    else {
+        // Rendezvous
+        start_up = param->rend_a;
+        per_byte_cost = k_value / (param->rend_rcb + (k_value - 1) * param->rend_rcb);
+    }
+
     //printf("handle_msg_ready_event(), lp %llu.\n", (unsigned long long)lp->gid);
     /* add statistics */
     stat = model_net_find_stats(m->category, ns->sn_stats_array);
@@ -351,7 +427,7 @@ static void handle_msg_ready_event(
     stat->recv_bytes += m->net_msg_size_bytes;
     m->recv_time_saved = stat->recv_time;
     stat->recv_time += rate_to_ns(m->net_msg_size_bytes,
-            ns->params.net_bw_mbps);
+            per_byte_cost);
 
     /* are we available to recv the msg? */
     /* were we available when the transmission was started? */
@@ -360,7 +436,7 @@ static void handle_msg_ready_event(
 
     /* calculate transfer time based on msg size and bandwidth */
     recv_queue_time += rate_to_ns(m->net_msg_size_bytes,
-            ns->params.net_bw_mbps);
+            per_byte_cost);
 
     /* bump up input queue idle time accordingly */
     m->net_recv_next_idle_saved = ns->net_recv_next_idle;
@@ -438,19 +514,41 @@ static void handle_msg_start_event(
     total_event_size = model_net_get_msg_sz(SIMPLENET) + m->event_size_bytes +
         m->local_event_size_bytes;
 
+    // Determine model parameters
+    int param_index = get_param_index(lp->gid, m->dest_mn_lp);
+    const simplenet_param* param = ns->params[param_index];
+    double start_up;
+    double per_byte_cost;
+
+    if (m->net_msg_size_bytes <= param->short_limit) {
+        // Short
+        start_up = param->short_a;
+        per_byte_cost = k_value * param->short_b;
+    }
+    else if (m->net_msg_size_bytes <= param->eager_limit) {
+        // Eager
+        start_up = param->eager_a;
+        per_byte_cost = k_value / (param->eager_rcb + (k_value - 1) * param->eager_rcb);
+    }
+    else {
+        // Rendezvous
+        start_up = param->rend_a;
+        per_byte_cost = k_value / (param->rend_rcb + (k_value - 1) * param->rend_rcb);
+    }
+
     //printf("handle_msg_start_event(), lp %llu.\n", (unsigned long long)lp->gid);
     /* add statistics */
     stat = model_net_find_stats(m->category, ns->sn_stats_array);
     stat->send_count++;
     stat->send_bytes += m->net_msg_size_bytes;
     m->send_time_saved = stat->send_time;
-    stat->send_time += (ns->params.net_startup_ns + rate_to_ns(m->net_msg_size_bytes,
-                ns->params.net_bw_mbps));
+    stat->send_time += (start_up + rate_to_ns(m->net_msg_size_bytes,
+                per_byte_cost));
     if(stat->max_event_size < total_event_size)
         stat->max_event_size = total_event_size;
 
     /* calculate send time stamp */
-    send_queue_time = ns->params.net_startup_ns; /* net msg startup cost */
+    send_queue_time = start_up; /* net msg startup cost */
     /* bump up time if the NIC send queue isn't idle right now */
     if(ns->net_send_next_idle > tw_now(lp))
         send_queue_time += ns->net_send_next_idle - tw_now(lp);
@@ -460,7 +558,7 @@ static void handle_msg_start_event(
      */
     m->net_send_next_idle_saved = ns->net_send_next_idle;
     ns->net_send_next_idle = send_queue_time + tw_now(lp) +
-        rate_to_ns(m->net_msg_size_bytes, ns->params.net_bw_mbps);
+        rate_to_ns(m->net_msg_size_bytes, per_byte_cost);
 
     void *m_data;
     e_new = model_net_method_event_new(m->dest_mn_lp, send_queue_time, lp,
@@ -572,41 +670,138 @@ static tw_stime simplenet_packet_event(
 
 static void sn_configure()
 {
+    char intra_socket_config[MAX_NAME_LENGTH];
+    char inter_socket_config[MAX_NAME_LENGTH];
+    char inter_node_config[MAX_NAME_LENGTH];
+
     anno_map = codes_mapping_get_lp_anno_map(LP_CONFIG_NM);
     assert(anno_map);
-    num_params = anno_map->num_annos + (anno_map->has_unanno_lp > 0);
+    num_params = N_PARAM_TYPES * (anno_map->num_annos + (anno_map->has_unanno_lp > 0));
     all_params = malloc(num_params * sizeof(*all_params));
     for (int i = 0; i < anno_map->num_annos; i++){
         const char * anno = anno_map->annotations[i].ptr;
         int rc;
-        rc = configuration_get_value_double(&config, "PARAMS",
-                "net_startup_ns", anno, &all_params[i].net_startup_ns);
-        if (rc != 0){
-            tw_error(TW_LOC,
-                    "simplenet: unable to read PARAMS:net_startup_ns@%s",
-                    anno);
+        rc = configuration_get_value_int(&config, "PARAMS", "k_value", anno, &k_value);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:k_value@%s", anno);
         }
-        rc = configuration_get_value_double(&config, "PARAMS", "net_bw_mbps",
-                anno, &all_params[i].net_bw_mbps);
-        if (rc != 0){
-            tw_error(TW_LOC, "simplenet: unable to read PARAMS:net_bw_mbps@%s",
-                    anno);
+
+        rc = configuration_get_value_int(&config, "PARAMS", "socket_size", anno, &socket_size);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:socket_size@%s", anno);
         }
+
+        rc = configuration_get_value_relpath(&config, "PARAMS", "intra_socket_config",
+                anno, intra_socket_config, MAX_NAME_LENGTH);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:intra_socket_config@%s", anno);
+        }
+        nodes_set_params(intra_socket_config, &all_params[i]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_socket_config",
+                anno, inter_socket_config, MAX_NAME_LENGTH);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_socket_config@%s", anno);
+        }
+        nodes_set_params(inter_socket_config, &all_params[i+1]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_node_config",
+                anno, inter_node_config, MAX_NAME_LENGTH);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_node_config@%s", anno);
+        }
+        nodes_set_params(inter_node_config, &all_params[i+2]);
     }
     if (anno_map->has_unanno_lp > 0){
         int rc;
-        rc = configuration_get_value_double(&config, "PARAMS",
-                "net_startup_ns", NULL,
-                &all_params[num_params-1].net_startup_ns);
-        if (rc != 0){
-            tw_error(TW_LOC, "simplenet: unable to read PARAMS:net_startup_ns");
+        rc = configuration_get_value_int(&config, "PARAMS", "k_value", NULL, &k_value);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:k_value");
         }
-        rc = configuration_get_value_double(&config, "PARAMS", "net_bw_mbps",
-                NULL, &all_params[num_params-1].net_bw_mbps);
-        if (rc != 0){
-            tw_error(TW_LOC, "simplenet: unable to read PARAMS:net_bw_mbps");
+
+        rc = configuration_get_value_int(&config, "PARAMS", "socket_size", NULL, &socket_size);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:socket_size");
         }
+
+        rc = configuration_get_value_relpath(&config, "PARAMS", "intra_socket_config",
+                NULL, intra_socket_config, MAX_NAME_LENGTH);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:intra_socket_config");
+        }
+        nodes_set_params(intra_socket_config, &all_params[N_PARAM_TYPES*anno_map->num_annos]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_socket_config",
+                NULL, inter_socket_config, MAX_NAME_LENGTH);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_socket_config");
+        }
+        nodes_set_params(inter_socket_config, &all_params[N_PARAM_TYPES*anno_map->num_annos+1]);
+
+        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_node_config",
+                NULL, inter_node_config, MAX_NAME_LENGTH);
+        if (rc != 0) {
+            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_node_config");
+        }
+        nodes_set_params(inter_node_config, &all_params[N_PARAM_TYPES*anno_map->num_annos+2]);
     }
+
+    node_size = codes_mapping_get_lp_count("MODELNET_GRP", 1, "modelnet_simplep2p", NULL, 1);
+}
+
+void nodes_set_params(const char* config_file, simplenet_param* params) {
+    FILE *conf;
+    int ret;
+    char buffer[512];
+    int line = 0;
+
+    printf("NODES using parameters from file %s\n", config_file);
+
+    conf = fopen(config_file, "r");
+    if (!conf) {
+        perror("fopen");
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%d %d", &params->short_limit, &params->eager_limit);
+    line++;
+    if (ret != 2) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%lf %lf", &params->short_a, &params->short_b);
+    line++;
+    if (ret != 2) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%lf %lf %lf", &params->eager_a, &params->eager_rcb,
+            &params->eager_rci);
+    line++;
+    if (ret != 3) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%lf %lf %lf", &params->rend_a, &params->rend_rcb,
+            &params->rend_rci);
+    line++;
+    if (ret != 3) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    printf("Parsed %d lines from %s\n", line, config_file);
+
+    fclose(conf);
+
+    return;
 }
 
 static void simplenet_packet_event_rc(tw_lp *sender)
