@@ -395,7 +395,7 @@ static void handle_msg_ready_event(
     struct mn_stats* stat;
 
     // Determine model parameters
-    int param_index = get_param_index(lp->gid, m->dest_mn_lp);
+    int param_index = get_param_index(m->src_mn_lp, lp->gid);
     const simplenet_param* param = ns->params[param_index];
     double per_byte_cost; // us/B
 
