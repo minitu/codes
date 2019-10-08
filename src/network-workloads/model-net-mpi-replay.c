@@ -32,7 +32,7 @@
 
 // NOTE: Message tracking currently only works in sequential mode.
 // Reverse computation has not been implemented.
-static int enable_msg_tracking = 1;
+static int enable_msg_tracking = 0;
 static int msg_size_hash_compare(void* key, struct qhash_head* link);
 
 /* NOTE: Message tracking works in sequential mode only! */
@@ -734,8 +734,9 @@ static int remove_matching_send(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
   }
 
   if (matched) {
-    if (enable_msg_tracking && (qi->num_bytes < eager_limit))
+    if (enable_msg_tracking && (qi->num_bytes < eager_limit)) {
       update_message_size(s, lp, bf, m, qi, 1, 0);
+    }
 
     m->fwd.matched_req = qitem->req_id;
     if (qitem->num_bytes >= eager_limit) {
@@ -1249,8 +1250,9 @@ static int remove_matching_recv(nw_state* s, tw_bf* bf, nw_message* m, tw_lp* lp
   if (matched) {
     if (qitem->num_bytes < eager_limit) {
       // Eager message, store message information
-      if (enable_msg_tracking)
+      if (enable_msg_tracking) {
         update_message_size(s, lp, bf, m, qitem, 1, 1);
+      }
 
       bf->c12 = 1;
       m->rc.saved_recv_time = s->recv_time;
