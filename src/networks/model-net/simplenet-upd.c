@@ -28,7 +28,7 @@
 /* structs for initializing a network/ specifying network parameters */
 struct simplenet_param
 {
-    int k_value;
+    double k_value;
     int short_limit;
     int eager_limit;
     double short_a;
@@ -401,15 +401,15 @@ static void handle_msg_ready_event(
 
     if (m->net_msg_size_bytes <= param->short_limit) {
         // Short
-        per_byte_cost = (double)param->k_value * param->short_b;
+        per_byte_cost = param->k_value * param->short_b;
     }
     else if (m->net_msg_size_bytes <= param->eager_limit) {
         // Eager
-        per_byte_cost = (double)param->k_value / (param->eager_rcb + (double)(param->k_value - 1) * param->eager_rci);
+        per_byte_cost = param->k_value / (param->eager_rcb + (param->k_value - 1) * param->eager_rci);
     }
     else {
         // Rendezvous
-        per_byte_cost = (double)param->k_value / (param->rend_rcb + (double)(param->k_value - 1) * param->rend_rci);
+        per_byte_cost = param->k_value / (param->rend_rcb + (param->k_value - 1) * param->rend_rci);
     }
 
     //printf("handle_msg_ready_event(), lp %llu.\n", (unsigned long long)lp->gid);
@@ -513,17 +513,17 @@ static void handle_msg_start_event(
     if (m->net_msg_size_bytes <= param->short_limit) {
         // Short
         start_up = param->short_a;
-        per_byte_cost = (double)param->k_value * param->short_b;
+        per_byte_cost = param->k_value * param->short_b;
     }
     else if (m->net_msg_size_bytes <= param->eager_limit) {
         // Eager
         start_up = param->eager_a;
-        per_byte_cost = (double)param->k_value / (param->eager_rcb + (double)(param->k_value - 1) * param->eager_rci);
+        per_byte_cost = param->k_value / (param->eager_rcb + (param->k_value - 1) * param->eager_rci);
     }
     else {
         // Rendezvous
         start_up = param->rend_a;
-        per_byte_cost = (double)param->k_value / (param->rend_rcb + (double)(param->k_value - 1) * param->rend_rci);
+        per_byte_cost = param->k_value / (param->rend_rcb + (param->k_value - 1) * param->rend_rci);
     }
     start_up *= 1000; // convert from us to ns
 
@@ -746,7 +746,7 @@ void nodes_set_params(const char* config_file, simplenet_param* params) {
     }
 
     fgets(buffer, 512, conf);
-    ret = sscanf(buffer, "%d", &params->k_value);
+    ret = sscanf(buffer, "%lf", &params->k_value);
     line++;
     if (ret != 1) {
         fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
@@ -788,7 +788,7 @@ void nodes_set_params(const char* config_file, simplenet_param* params) {
     }
 
     printf("Parsed %d lines from %s\n", line, config_file);
-    printf("Number of communication process pairs (k): %d\n", params->k_value);
+    printf("Number of communication process pairs (k): %lf\n", params->k_value);
     printf("Short limit: %d, eager limit: %d\n", params->short_limit, params->eager_limit);
     printf("Short a (us), b (us/B): %.6lf, %.6lf\n", params->short_a, params->short_b);
     printf("Eager a (us), Rcb (MB/s), Rci (MB/s): %.6lf, %.6lf, %.6lf\n", params->eager_a, params->eager_rcb, params->eager_rci);
