@@ -20,13 +20,26 @@
 #define CATEGORY_NAME_MAX 16
 #define CATEGORY_MAX 12
 
-#define N_PARAM_TYPES 3
+#define N_PARAM_TYPES 3 // intra-socket, inter-socket, inter-node
 
 #define LP_CONFIG_NM (model_net_lp_config_names[SIMPLENET])
 #define LP_METHOD_NM (model_net_method_names[SIMPLENET])
 
 /* structs for initializing a network/ specifying network parameters */
-struct simplenet_param
+struct postal_param
+{
+    int short_limit;
+    int eager_limit;
+    double short_a;
+    double short_b;
+    double eager_a;
+    double eager_b;
+    double rend_a;
+    double rend_b;
+};
+typedef struct postal_param postal_param;
+
+struct maxrate_param
 {
     double k_value;
     int short_limit;
@@ -40,7 +53,7 @@ struct simplenet_param
     double rend_rcb;
     double rend_rci;
 };
-typedef struct simplenet_param simplenet_param;
+typedef struct maxrate_param maxrate_param;
 
 /*Define simplenet data types and structs*/
 typedef struct sn_state sn_state;
@@ -51,16 +64,19 @@ struct sn_state
     tw_stime net_send_next_idle;
     tw_stime net_recv_next_idle;
     const char * anno;
-    const simplenet_param* params[N_PARAM_TYPES]; // intra-socket, inter-socket, inter-node
+    const postal_param* postal_params[N_PARAM_TYPES];
+    const maxrate_param* maxrate_params[N_PARAM_TYPES];
     struct mn_stats sn_stats_array[CATEGORY_MAX];
 };
 
 /* annotation-specific parameters (unannotated entry occurs at the
  * last index) */
-static uint64_t                  num_params = 0;
-static simplenet_param         * all_params = NULL;
-static const config_anno_map_t * anno_map   = NULL;
+static uint64_t num_params = 0;
+static postal_param* all_postal_params = NULL;
+static maxrate_param* all_maxrate_params = NULL;
+static const config_anno_map_t* anno_map = NULL;
 
+static int model_type = 0; // 0: simple-net (postal), 1: max-rate
 static int node_size = 1;
 static int socket_size = 1;
 
@@ -92,7 +108,8 @@ static void simple_net_collective_rc();
 /* sets up the simplenet parameters through modelnet interface */
 static void sn_configure();
 
-void nodes_set_params(const char* config_file, simplenet_param* params);
+void nodes_set_postal_params(const char* config_file, postal_param* params);
+void nodes_set_maxrate_params(const char* config_file, maxrate_param* params);
 
 /* allocate a new event that will pass through simplenet to arriave at its
  * destination:
@@ -240,13 +257,15 @@ static void sn_init(
     ns->anno = codes_mapping_get_annotation_by_lpid(lp->gid);
     if (ns->anno == NULL) {
         for (i = 0; i < N_PARAM_TYPES; i++) {
-            ns->params[i] = &all_params[num_params-N_PARAM_TYPES+i];
+            ns->postal_params[i] = &all_postal_params[num_params-N_PARAM_TYPES+i];
+            ns->maxrate_params[i] = &all_maxrate_params[num_params-N_PARAM_TYPES+i];
         }
     }
     else {
         int id = configuration_get_annotation_index(ns->anno, anno_map);
         for (i = 0; i < N_PARAM_TYPES; i++) {
-            ns->params[i] = &all_params[id+i];
+            ns->postal_params[i] = &all_postal_params[id+i];
+            ns->maxrate_params[i] = &all_maxrate_params[id+i];
         }
     }
 
@@ -395,21 +414,42 @@ static void handle_msg_ready_event(
     struct mn_stats* stat;
 
     // Determine model parameters
-    int param_index = get_param_index(m->src_mn_lp, lp->gid);
-    const simplenet_param* param = ns->params[param_index];
     double per_byte_cost; // us/B
+    int param_index = get_param_index(m->src_mn_lp, lp->gid);
+    if (model_type == 0) { // simple-net
+        const postal_param* param = ns->postal_params[param_index];
 
-    if (m->net_msg_size_bytes <= param->short_limit) {
-        // Short
-        per_byte_cost = param->k_value * param->short_b;
+        if (m->net_msg_size_bytes <= param->short_limit) {
+            // Short
+            per_byte_cost = param->short_b;
+        }
+        else if (m->net_msg_size_bytes <= param->eager_limit) {
+            // Eager
+            per_byte_cost = param->eager_b;
+        }
+        else {
+            // Rendezvous
+            per_byte_cost = param->rend_b;
+        }
     }
-    else if (m->net_msg_size_bytes <= param->eager_limit) {
-        // Eager
-        per_byte_cost = param->k_value / (param->eager_rcb + (param->k_value - 1) * param->eager_rci);
+    else if (model_type == 1) { // max-rate
+        const maxrate_param* param = ns->maxrate_params[param_index];
+
+        if (m->net_msg_size_bytes <= param->short_limit) {
+            // Short
+            per_byte_cost = param->k_value * param->short_b;
+        }
+        else if (m->net_msg_size_bytes <= param->eager_limit) {
+            // Eager
+            per_byte_cost = param->k_value / (param->eager_rcb + (param->k_value - 1) * param->eager_rci);
+        }
+        else {
+            // Rendezvous
+            per_byte_cost = param->k_value / (param->rend_rcb + (param->k_value - 1) * param->rend_rci);
+        }
     }
     else {
-        // Rendezvous
-        per_byte_cost = param->k_value / (param->rend_rcb + (param->k_value - 1) * param->rend_rci);
+        tw_error(TW_LOC, "Unsupported model type!");
     }
 
     //printf("handle_msg_ready_event(), lp %llu.\n", (unsigned long long)lp->gid);
@@ -505,25 +545,49 @@ static void handle_msg_start_event(
         m->local_event_size_bytes;
 
     // Determine model parameters
-    int param_index = get_param_index(lp->gid, m->dest_mn_lp);
-    const simplenet_param* param = ns->params[param_index];
     double start_up = 0;
     double per_byte_cost = 0;
+    int param_index = get_param_index(lp->gid, m->dest_mn_lp);
+    if (model_type == 0) { // simple-net
+        const postal_param* param = ns->postal_params[param_index];
 
-    if (m->net_msg_size_bytes <= param->short_limit) {
-        // Short
-        start_up = param->short_a;
-        per_byte_cost = param->k_value * param->short_b;
+        if (m->net_msg_size_bytes <= param->short_limit) {
+            // Short
+            start_up = param->short_a;
+            per_byte_cost = param->short_b;
+        }
+        else if (m->net_msg_size_bytes <= param->eager_limit) {
+            // Eager
+            start_up = param->eager_a;
+            per_byte_cost = param->eager_b;
+        }
+        else {
+            // Rendezvous
+            start_up = param->rend_a;
+            per_byte_cost = param->rend_b;
+        }
     }
-    else if (m->net_msg_size_bytes <= param->eager_limit) {
-        // Eager
-        start_up = param->eager_a;
-        per_byte_cost = param->k_value / (param->eager_rcb + (param->k_value - 1) * param->eager_rci);
+    else if (model_type == 1) { // max-rate
+        const maxrate_param* param = ns->maxrate_params[param_index];
+
+        if (m->net_msg_size_bytes <= param->short_limit) {
+            // Short
+            start_up = param->short_a;
+            per_byte_cost = param->k_value * param->short_b;
+        }
+        else if (m->net_msg_size_bytes <= param->eager_limit) {
+            // Eager
+            start_up = param->eager_a;
+            per_byte_cost = param->k_value / (param->eager_rcb + (param->k_value - 1) * param->eager_rci);
+        }
+        else {
+            // Rendezvous
+            start_up = param->rend_a;
+            per_byte_cost = param->k_value / (param->rend_rcb + (param->k_value - 1) * param->rend_rci);
+        }
     }
     else {
-        // Rendezvous
-        start_up = param->rend_a;
-        per_byte_cost = param->k_value / (param->rend_rcb + (param->k_value - 1) * param->rend_rci);
+        tw_error(TW_LOC, "Unsupported model type!");
     }
     start_up *= 1000; // convert from us to ns
 
@@ -660,14 +724,25 @@ static tw_stime simplenet_packet_event(
 
 static void sn_configure()
 {
-    char intra_socket_config[MAX_NAME_LENGTH];
-    char inter_socket_config[MAX_NAME_LENGTH];
-    char inter_node_config[MAX_NAME_LENGTH];
+    char postal_intra_socket_config[MAX_NAME_LENGTH];
+    char postal_inter_socket_config[MAX_NAME_LENGTH];
+    char postal_inter_node_config[MAX_NAME_LENGTH];
+    char maxrate_intra_socket_config[MAX_NAME_LENGTH];
+    char maxrate_inter_socket_config[MAX_NAME_LENGTH];
+    char maxrate_inter_node_config[MAX_NAME_LENGTH];
 
     anno_map = codes_mapping_get_lp_anno_map(LP_CONFIG_NM);
     assert(anno_map);
     num_params = N_PARAM_TYPES * (anno_map->num_annos + (anno_map->has_unanno_lp > 0));
-    all_params = malloc(num_params * sizeof(*all_params));
+    all_postal_params = malloc(num_params * sizeof(postal_param));
+    all_maxrate_params = malloc(num_params * sizeof(maxrate_param));
+
+    int rc;
+    rc = configuration_get_value_int(&config, "PARAMS", "model_type", NULL, &model_type);
+    if (rc < 0) {
+        tw_error(TW_LOC, "NODES: unable to read PARAMS:model_type");
+    }
+
     for (int i = 0; i < anno_map->num_annos; i++){
         const char * anno = anno_map->annotations[i].ptr;
         int rc;
@@ -676,26 +751,65 @@ static void sn_configure()
             tw_error(TW_LOC, "NODES: unable to read PARAMS:socket_size@%s", anno);
         }
 
-        rc = configuration_get_value_relpath(&config, "PARAMS", "intra_socket_config",
-                anno, intra_socket_config, MAX_NAME_LENGTH);
-        if (rc < 0) {
-            tw_error(TW_LOC, "NODES: unable to read PARAMS:intra_socket_config@%s", anno);
+        if (model_type == 0) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "postal_intra_socket_config",
+                    anno, postal_intra_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:postal_intra_socket_config@%s", anno);
+            }
+            nodes_set_postal_params(postal_intra_socket_config, &all_postal_params[i]);
         }
-        nodes_set_params(intra_socket_config, &all_params[i]);
+        else if (model_type == 1) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_intra_socket_config",
+                    anno, maxrate_intra_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:maxrate_intra_socket_config@%s", anno);
+            }
+            nodes_set_maxrate_params(maxrate_intra_socket_config, &all_maxrate_params[i]);
+        }
+        else {
+            tw_error(TW_LOC, "Unsupported model type!");
+        }
 
-        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_socket_config",
-                anno, inter_socket_config, MAX_NAME_LENGTH);
-        if (rc < 0) {
-            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_socket_config@%s", anno);
+        if (model_type == 0) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_socket_config",
+                    anno, postal_inter_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:postal_inter_socket_config@%s", anno);
+            }
+            nodes_set_postal_params(postal_inter_socket_config, &all_postal_params[i+1]);
         }
-        nodes_set_params(inter_socket_config, &all_params[i+1]);
+        else if (model_type == 1) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_socket_config",
+                    anno, maxrate_inter_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:maxrate_inter_socket_config@%s", anno);
+            }
+            nodes_set_maxrate_params(maxrate_inter_socket_config, &all_maxrate_params[i+1]);
+        }
+        else {
+            tw_error(TW_LOC, "Unsupported model type!");
+        }
 
-        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_node_config",
-                anno, inter_node_config, MAX_NAME_LENGTH);
-        if (rc < 0) {
-            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_node_config@%s", anno);
+        if (model_type == 0) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_node_config",
+                    anno, postal_inter_node_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:postal_inter_node_config@%s", anno);
+            }
+            nodes_set_postal_params(postal_inter_node_config, &all_postal_params[i+2]);
         }
-        nodes_set_params(inter_node_config, &all_params[i+2]);
+        else if (model_type == 1) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_node_config",
+                    anno, maxrate_inter_node_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:maxrate_inter_node_config@%s", anno);
+            }
+            nodes_set_maxrate_params(maxrate_inter_node_config, &all_maxrate_params[i+2]);
+        }
+        else {
+            tw_error(TW_LOC, "Unsupported model type!");
+        }
     }
     if (anno_map->has_unanno_lp > 0){
         int rc;
@@ -704,26 +818,66 @@ static void sn_configure()
             tw_error(TW_LOC, "NODES: unable to read PARAMS:socket_size");
         }
 
-        rc = configuration_get_value_relpath(&config, "PARAMS", "intra_socket_config",
-                NULL, intra_socket_config, MAX_NAME_LENGTH);
-        if (rc < 0) {
-            tw_error(TW_LOC, "NODES: unable to read PARAMS:intra_socket_config");
+        if (model_type == 0) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "postal_intra_socket_config",
+                    NULL, postal_intra_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:postal_intra_socket_config");
+            }
+            nodes_set_postal_params(postal_intra_socket_config, &all_postal_params[N_PARAM_TYPES*anno_map->num_annos]);
         }
-        nodes_set_params(intra_socket_config, &all_params[N_PARAM_TYPES*anno_map->num_annos]);
+        else if (model_type == 1) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_intra_socket_config",
+                    NULL, maxrate_intra_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:maxrate_intra_socket_config");
+            }
+            nodes_set_maxrate_params(maxrate_intra_socket_config, &all_maxrate_params[N_PARAM_TYPES*anno_map->num_annos]);
+        }
+        else {
+            tw_error(TW_LOC, "Unsupported model type!");
+        }
 
-        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_socket_config",
-                NULL, inter_socket_config, MAX_NAME_LENGTH);
-        if (rc < 0) {
-            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_socket_config");
+        if (model_type == 0) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_socket_config",
+                    NULL, postal_inter_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:postal_inter_socket_config");
+            }
+            nodes_set_postal_params(postal_inter_socket_config, &all_postal_params[N_PARAM_TYPES*anno_map->num_annos+1]);
         }
-        nodes_set_params(inter_socket_config, &all_params[N_PARAM_TYPES*anno_map->num_annos+1]);
+        else if (model_type == 1) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_socket_config",
+                    NULL, maxrate_inter_socket_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:maxrate_inter_socket_config");
+            }
+            nodes_set_maxrate_params(maxrate_inter_socket_config, &all_maxrate_params[N_PARAM_TYPES*anno_map->num_annos+1]);
+        }
+        else {
+            tw_error(TW_LOC, "Unsupported model type!");
+        }
 
-        rc = configuration_get_value_relpath(&config, "PARAMS", "inter_node_config",
-                NULL, inter_node_config, MAX_NAME_LENGTH);
-        if (rc < 0) {
-            tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_node_config");
+        if (model_type == 0) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_node_config",
+                    NULL, postal_inter_node_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:postal_inter_node_config");
+            }
+            nodes_set_postal_params(postal_inter_node_config, &all_postal_params[N_PARAM_TYPES*anno_map->num_annos+2]);
         }
-        nodes_set_params(inter_node_config, &all_params[N_PARAM_TYPES*anno_map->num_annos+2]);
+        else if (model_type == 1) {
+            rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_node_config",
+                    NULL, maxrate_inter_node_config, MAX_NAME_LENGTH);
+            if (rc < 0) {
+                tw_error(TW_LOC, "NODES: unable to read PARAMS:maxrate_inter_node_config");
+            }
+
+            nodes_set_maxrate_params(maxrate_inter_node_config, &all_maxrate_params[N_PARAM_TYPES*anno_map->num_annos+2]);
+        }
+        else {
+            tw_error(TW_LOC, "Unsupported model type!");
+        }
     }
 
     node_size = codes_mapping_get_lp_count("MODELNET_GRP", 1, "modelnet_simplenet", NULL, 1);
@@ -731,13 +885,71 @@ static void sn_configure()
     printf("node_size: %d\n", node_size);
 }
 
-void nodes_set_params(const char* config_file, simplenet_param* params) {
+void nodes_set_postal_params(const char* config_file, postal_param* params) {
     FILE *conf;
     int ret;
     char buffer[512];
     int line = 0;
 
-    printf("NODES using parameters from file %s\n", config_file);
+    printf("NODES using simplenet parameters from file %s\n", config_file);
+
+    conf = fopen(config_file, "r");
+    if (!conf) {
+        perror("fopen");
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%d %d", &params->short_limit, &params->eager_limit);
+    line++;
+    if (ret != 2) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%lf %lf", &params->short_a, &params->short_b);
+    line++;
+    if (ret != 2) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%lf %lf", &params->eager_a, &params->eager_b);
+    line++;
+    if (ret != 2) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    fgets(buffer, 512, conf);
+    ret = sscanf(buffer, "%lf %lf", &params->rend_a, &params->rend_b);
+    line++;
+    if (ret != 2) {
+        fprintf(stderr, "Malformed line %d in %s\n", line, config_file);
+        assert(0);
+    }
+
+    printf("Parsed %d lines from %s\n", line, config_file);
+    printf("Short limit: %d, eager limit: %d\n", params->short_limit, params->eager_limit);
+    printf("Short a (us), b (us/B): %.6lf, %.6lf\n", params->short_a, params->short_b);
+    printf("Eager a (us), b (us/B): %.6lf, %.6lf\n", params->eager_a, params->eager_b);
+    printf("Rendezvous a (us), b (us/B): %.6lf, %.6lf\n", params->rend_a, params->rend_b);
+
+    fclose(conf);
+
+    return;
+}
+
+
+void nodes_set_maxrate_params(const char* config_file, maxrate_param* params) {
+    FILE *conf;
+    int ret;
+    char buffer[512];
+    int line = 0;
+
+    printf("NODES using maxrate parameters from file %s\n", config_file);
 
     conf = fopen(config_file, "r");
     if (!conf) {
