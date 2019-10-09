@@ -76,7 +76,7 @@ static postal_param* all_postal_params = NULL;
 static maxrate_param* all_maxrate_params = NULL;
 static const config_anno_map_t* anno_map = NULL;
 
-static int model_type = 0; // 0: simple-net (postal), 1: max-rate
+static int model_types[N_PARAM_TYPES]; // 0: simple-net (postal), 1: max-rate
 static int node_size = 1;
 static int socket_size = 1;
 
@@ -416,7 +416,7 @@ static void handle_msg_ready_event(
     // Determine model parameters
     double per_byte_cost; // us/B
     int param_index = get_param_index(m->src_mn_lp, lp->gid);
-    if (model_type == 0) { // simple-net
+    if (model_types[param_index] == 0) { // simple-net
         const postal_param* param = ns->postal_params[param_index];
 
         if (m->net_msg_size_bytes <= param->short_limit) {
@@ -432,7 +432,7 @@ static void handle_msg_ready_event(
             per_byte_cost = param->rend_b;
         }
     }
-    else if (model_type == 1) { // max-rate
+    else if (model_types[param_index] == 1) { // max-rate
         const maxrate_param* param = ns->maxrate_params[param_index];
 
         if (m->net_msg_size_bytes <= param->short_limit) {
@@ -548,7 +548,7 @@ static void handle_msg_start_event(
     double start_up = 0;
     double per_byte_cost = 0;
     int param_index = get_param_index(lp->gid, m->dest_mn_lp);
-    if (model_type == 0) { // simple-net
+    if (model_types[param_index] == 0) { // simple-net
         const postal_param* param = ns->postal_params[param_index];
 
         if (m->net_msg_size_bytes <= param->short_limit) {
@@ -567,7 +567,7 @@ static void handle_msg_start_event(
             per_byte_cost = param->rend_b;
         }
     }
-    else if (model_type == 1) { // max-rate
+    else if (model_types[param_index] == 1) { // max-rate
         const maxrate_param* param = ns->maxrate_params[param_index];
 
         if (m->net_msg_size_bytes <= param->short_limit) {
@@ -738,9 +738,17 @@ static void sn_configure()
     all_maxrate_params = malloc(num_params * sizeof(maxrate_param));
 
     int rc;
-    rc = configuration_get_value_int(&config, "PARAMS", "model_type", NULL, &model_type);
+    rc = configuration_get_value_int(&config, "PARAMS", "intra_socket_model_type", NULL, &model_types[0]);
     if (rc < 0) {
-        tw_error(TW_LOC, "NODES: unable to read PARAMS:model_type");
+        tw_error(TW_LOC, "NODES: unable to read PARAMS:intra_socket_model_type");
+    }
+    rc = configuration_get_value_int(&config, "PARAMS", "inter_socket_model_type", NULL, &model_types[1]);
+    if (rc < 0) {
+        tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_socket_model_type");
+    }
+    rc = configuration_get_value_int(&config, "PARAMS", "inter_node_model_type", NULL, &model_types[2]);
+    if (rc < 0) {
+        tw_error(TW_LOC, "NODES: unable to read PARAMS:inter_node_model_type");
     }
 
     for (int i = 0; i < anno_map->num_annos; i++){
@@ -751,7 +759,7 @@ static void sn_configure()
             tw_error(TW_LOC, "NODES: unable to read PARAMS:socket_size@%s", anno);
         }
 
-        if (model_type == 0) {
+        if (model_types[0] == 0) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "postal_intra_socket_config",
                     anno, postal_intra_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -759,7 +767,7 @@ static void sn_configure()
             }
             nodes_set_postal_params(postal_intra_socket_config, &all_postal_params[i]);
         }
-        else if (model_type == 1) {
+        else if (model_types[0] == 1) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_intra_socket_config",
                     anno, maxrate_intra_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -771,7 +779,7 @@ static void sn_configure()
             tw_error(TW_LOC, "Unsupported model type!");
         }
 
-        if (model_type == 0) {
+        if (model_types[1] == 0) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_socket_config",
                     anno, postal_inter_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -779,7 +787,7 @@ static void sn_configure()
             }
             nodes_set_postal_params(postal_inter_socket_config, &all_postal_params[i+1]);
         }
-        else if (model_type == 1) {
+        else if (model_types[1] == 1) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_socket_config",
                     anno, maxrate_inter_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -791,7 +799,7 @@ static void sn_configure()
             tw_error(TW_LOC, "Unsupported model type!");
         }
 
-        if (model_type == 0) {
+        if (model_types[2] == 0) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_node_config",
                     anno, postal_inter_node_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -799,7 +807,7 @@ static void sn_configure()
             }
             nodes_set_postal_params(postal_inter_node_config, &all_postal_params[i+2]);
         }
-        else if (model_type == 1) {
+        else if (model_types[2] == 1) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_node_config",
                     anno, maxrate_inter_node_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -818,7 +826,7 @@ static void sn_configure()
             tw_error(TW_LOC, "NODES: unable to read PARAMS:socket_size");
         }
 
-        if (model_type == 0) {
+        if (model_types[0] == 0) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "postal_intra_socket_config",
                     NULL, postal_intra_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -826,7 +834,7 @@ static void sn_configure()
             }
             nodes_set_postal_params(postal_intra_socket_config, &all_postal_params[N_PARAM_TYPES*anno_map->num_annos]);
         }
-        else if (model_type == 1) {
+        else if (model_types[0] == 1) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_intra_socket_config",
                     NULL, maxrate_intra_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -838,7 +846,7 @@ static void sn_configure()
             tw_error(TW_LOC, "Unsupported model type!");
         }
 
-        if (model_type == 0) {
+        if (model_types[1] == 0) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_socket_config",
                     NULL, postal_inter_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -846,7 +854,7 @@ static void sn_configure()
             }
             nodes_set_postal_params(postal_inter_socket_config, &all_postal_params[N_PARAM_TYPES*anno_map->num_annos+1]);
         }
-        else if (model_type == 1) {
+        else if (model_types[1] == 1) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_socket_config",
                     NULL, maxrate_inter_socket_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -858,7 +866,7 @@ static void sn_configure()
             tw_error(TW_LOC, "Unsupported model type!");
         }
 
-        if (model_type == 0) {
+        if (model_types[2] == 0) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "postal_inter_node_config",
                     NULL, postal_inter_node_config, MAX_NAME_LENGTH);
             if (rc < 0) {
@@ -866,7 +874,7 @@ static void sn_configure()
             }
             nodes_set_postal_params(postal_inter_node_config, &all_postal_params[N_PARAM_TYPES*anno_map->num_annos+2]);
         }
-        else if (model_type == 1) {
+        else if (model_types[2] == 1) {
             rc = configuration_get_value_relpath(&config, "PARAMS", "maxrate_inter_node_config",
                     NULL, maxrate_inter_node_config, MAX_NAME_LENGTH);
             if (rc < 0) {
