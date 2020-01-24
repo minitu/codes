@@ -35,6 +35,10 @@
 static int enable_msg_tracking = 0;
 static int msg_size_hash_compare(void* key, struct qhash_head* link);
 
+// Compares actual and estimated MPI operation times
+// XXX: Only works in sequential mode!
+static int comparison_mode = 0;
+
 /* NOTE: Message tracking works in sequential mode only! */
 static int debug_cols = 0;
 /* Turning on this option slows down optimistic mode substantially. Only turn
@@ -2077,9 +2081,11 @@ void modelnet_mpi_replay_read_config()
   configuration_get_value_double(&config, "PARAMS", "soft_delay", NULL, &soft_delay_mpi);
   configuration_get_value_double(&config, "PARAMS", "copy_per_byte", NULL, &copy_per_byte_eager);
   configuration_get_value_int(&config, "PARAMS", "eager_limit", NULL, (int*)&eager_limit);
+  configuration_get_value_int(&config, "PARAMS", "comparison_mode", NULL, &comparison_mode);
   printf("compute_time_speedup: %lf, self_msg_overhead: %lf, nic_delay: %lf, "
-      "soft_delay: %lf, copy_per_byte: %lf, eager_limit: %llu\n", compute_time_speedup,
-      self_overhead, nic_delay, soft_delay_mpi, copy_per_byte_eager, eager_limit);
+      "soft_delay: %lf, copy_per_byte: %lf, eager_limit: %ld, comparison mode: %d\n",
+      compute_time_speedup, self_overhead, nic_delay, soft_delay_mpi,
+      copy_per_byte_eager, eager_limit, comparison_mode);
 }
 
 // Main
