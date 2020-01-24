@@ -925,7 +925,7 @@ int dumpi_trace_nw_workload_load(const char* params, int app_id, int rank)
 		libundumpi_populate_callbacks(CORTEX_MPICH_TRANSLATION, transarr);
 	}
 #else
-	libundumpi_populate_callbacks(CORTEX_MPICH_TRANSLATION, transarr);
+	libundumpi_populate_callbacks(CORTEX_NO_TRANSLATION, transarr);
 #endif
 #endif
     DUMPI_START_STREAM_READ(profile);
